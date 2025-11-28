@@ -1,0 +1,5 @@
+{
+  "name": "Chronicles of the Deep World",
+  "description": "An AI-powered RPG engine where NPCs have persistent internal states, hidden agendas, and dynamic relationships. The world remembers your actions.",
+  "requestFramePermissions": []
+}
