@@ -1,23 +1,28 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { WorldLocation, NPC } from '../types';
-import { MapPin, Move, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { WorldLocation, NPC, LocationConnection } from '../types';
+import { MapPin, Move, ZoomIn, ZoomOut, Maximize, Minimize, Eye, EyeOff, Lock, Footprints } from 'lucide-react';
 
 interface WorldMapProps {
   locations: WorldLocation[];
   currentLocationId: string;
   npcs: NPC[];
   onTravel: (locationName: string) => void;
+  onMaximize?: (isMax: boolean) => void;
 }
 
 interface Point { x: number; y: number }
 
-const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs, onTravel }) => {
+const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs, onTravel, onMaximize }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<Record<string, Point>>({});
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   
+  const [showNPCs, setShowNPCs] = useState(false);
+  const [selectedNPC, setSelectedNPC] = useState<string | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
+
   // Dragging states
   const [isDraggingMap, setIsDraggingMap] = useState(false);
   const [isDraggingNode, setIsDraggingNode] = useState<string | null>(null);
@@ -33,19 +38,21 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
         if (!newNodes[loc.id]) {
             hasChanges = true;
             // Place connected nodes near parents if possible
-            const connectedParentId = loc.connectedLocationIds.find(id => newNodes[id]);
-            if (connectedParentId) {
-                const parent = newNodes[connectedParentId];
+            const connectedParentLink = loc.connectedLocationIds.find(link => newNodes[link.targetId]);
+            if (connectedParentLink) {
+                const parent = newNodes[connectedParentLink.targetId];
                 // Random angle
                 const angle = Math.random() * Math.PI * 2;
+                // Use defined distance if available (scaled down), else default
+                const dist = Math.max(100, (connectedParentLink.distance || 50) * 3); 
                 newNodes[loc.id] = {
-                    x: parent.x + Math.cos(angle) * 150,
-                    y: parent.y + Math.sin(angle) * 150
+                    x: parent.x + Math.cos(angle) * dist,
+                    y: parent.y + Math.sin(angle) * dist
                 };
             } else {
                 // Spiral layout for initial or disconnected
                 const angle = index * 0.5;
-                const r = 100 + (index * 20);
+                const r = 100 + (index * 50);
                 newNodes[loc.id] = {
                     x: Math.cos(angle) * r,
                     y: Math.sin(angle) * r
@@ -84,18 +91,13 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
       setIsDraggingNode(id);
-      // We need to calculate offset relative to scale
-      // This is a simplification; for perfect drag we need inverse matrix, 
-      // but for relative movement, we just reset start logic
       const node = nodes[id];
-      // Store screen coord offset relative to node pos * scale
       setDragStart({ 
           x: e.clientX - (node.x * scale), 
           y: e.clientY - (node.y * scale) 
       });
   };
 
-  // Center on current player
   const centerOnPlayer = () => {
       const currentPos = nodes[currentLocationId];
       if (currentPos && containerRef.current) {
@@ -107,25 +109,44 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
       }
   };
 
-  // Auto center on mount/change if not dragging
   useEffect(() => {
      if (!isDraggingMap && !isDraggingNode && locations.length > 0) {
          centerOnPlayer();
      }
-  }, [currentLocationId, locations.length === 0]); // Only re-center on location change
+  }, [currentLocationId, locations.length === 0, isMaximized]); 
+
+  const toggleMaximize = () => {
+      const newState = !isMaximized;
+      setIsMaximized(newState);
+      if (onMaximize) onMaximize(newState);
+  };
 
   return (
-    <div className="w-full h-full bg-slate-900 relative overflow-hidden select-none" ref={containerRef}>
+    <div 
+        className={`bg-slate-900 relative overflow-hidden select-none border-l border-slate-800 ${isMaximized ? 'fixed inset-0 z-50' : 'w-full h-full'}`} 
+        ref={containerRef}
+    >
         
         {/* Controls */}
         <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
+            <button 
+                onClick={() => setShowNPCs(!showNPCs)} 
+                className={`p-2 rounded shadow transition-colors ${showNPCs ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+                title={showNPCs ? "Hide NPCs" : "Show NPCs"}
+            >
+                {showNPCs ? <Eye size={16} /> : <EyeOff size={16} />}
+            </button>
+            <div className="h-px bg-slate-700 my-1" />
             <button onClick={() => setScale(s => Math.min(s + 0.1, 2))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomIn size={16} /></button>
             <button onClick={() => setScale(s => Math.max(s - 0.1, 0.2))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomOut size={16} /></button>
-            <button onClick={centerOnPlayer} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><Maximize size={16} /></button>
+            <button onClick={centerOnPlayer} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><Move size={16} /></button>
+            <button onClick={toggleMaximize} className="p-2 bg-slate-800 text-indigo-400 rounded shadow hover:bg-slate-700 mt-2">
+                {isMaximized ? <Minimize size={16} /> : <Maximize size={16} />}
+            </button>
         </div>
 
-        <div className="absolute top-4 left-4 z-20 bg-black/50 px-3 py-1 rounded text-[10px] text-slate-400 pointer-events-none border border-slate-700">
-            Drag map to pan. Drag icons to rearrange.
+        <div className="absolute top-4 left-4 z-20 bg-black/50 px-3 py-1 rounded text-[10px] text-slate-400 pointer-events-none border border-slate-700 backdrop-blur-sm">
+            {isMaximized ? "Fullscreen Mode" : "Drag to pan"}
         </div>
 
         <div 
@@ -134,6 +155,7 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onClick={() => setSelectedNPC(null)}
         >
             <div 
                 style={{ 
@@ -143,23 +165,41 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                     position: 'absolute'
                 }}
             >
-                {/* Connections (Lines) */}
-                <svg className="absolute top-[-5000px] left-[-5000px] w-[10000px] h-[10000px] pointer-events-none" style={{ opacity: 0.5 }}>
+                {/* Connections */}
+                <svg className="absolute top-[-5000px] left-[-5000px] w-[10000px] h-[10000px] pointer-events-none">
                     {locations.map(loc => 
-                        loc.connectedLocationIds.map(targetId => {
+                        loc.connectedLocationIds.map(link => {
                             const start = nodes[loc.id];
-                            const end = nodes[targetId];
+                            const end = nodes[link.targetId];
                             if (!start || !end) return null;
-                            // Draw line only once per pair (id check)
-                            if (loc.id > targetId) return null; 
+                            if (loc.id > link.targetId) return null; // Draw once per pair
 
                             return (
-                                <line 
-                                    key={`${loc.id}-${targetId}`}
-                                    x1={5000 + start.x} y1={5000 + start.y}
-                                    x2={5000 + end.x} y2={5000 + end.y}
-                                    stroke="#64748b" strokeWidth="2" strokeDasharray="5 5"
-                                />
+                                <g key={`${loc.id}-${link.targetId}`}>
+                                    <line 
+                                        x1={5000 + start.x} y1={5000 + start.y}
+                                        x2={5000 + end.x} y2={5000 + end.y}
+                                        stroke={link.status === 'Blocked' ? '#ef4444' : '#64748b'} 
+                                        strokeWidth={link.status === 'Blocked' ? 3 : 2} 
+                                        strokeDasharray={link.status === 'Blocked' ? "0" : "5 5"}
+                                        opacity={0.6}
+                                    />
+                                    {/* Distance Label */}
+                                    <rect 
+                                        x={5000 + (start.x + end.x) / 2 - 10} 
+                                        y={5000 + (start.y + end.y) / 2 - 8}
+                                        width="20" height="16" fill="#0f172a" rx="4"
+                                    />
+                                    <text
+                                        x={5000 + (start.x + end.x) / 2}
+                                        y={5000 + (start.y + end.y) / 2 + 4}
+                                        fill="#94a3b8"
+                                        fontSize="10"
+                                        textAnchor="middle"
+                                    >
+                                        {link.distance}
+                                    </text>
+                                </g>
                             )
                         })
                     )}
@@ -179,7 +219,6 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                             style={{ left: pos.x, top: pos.y }}
                             onMouseDown={(e) => handleNodeMouseDown(e, loc.id)}
                         >
-                            {/* Icon Circle */}
                             <div className={`
                                 w-12 h-12 rounded-full border-2 flex items-center justify-center shadow-xl z-10 
                                 ${isCurrent 
@@ -192,7 +231,6 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                                 </div>
                             </div>
 
-                            {/* Label */}
                             <div className={`mt-2 px-2 py-0.5 rounded text-[10px] whitespace-nowrap border z-20 pointer-events-none select-none
                                 ${isCurrent ? 'bg-indigo-900/80 text-white border-indigo-500' : 'bg-black/60 text-slate-300 border-slate-700'}
                             `}>
@@ -200,26 +238,65 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                             </div>
 
                              {/* NPC Indicators */}
-                             {npcsHere.length > 0 && (
-                                <div className="absolute -top-2 -right-2 flex -space-x-1">
-                                    {npcsHere.map(npc => (
-                                        <div key={npc.id} className="w-4 h-4 rounded-full bg-green-500 border border-slate-900" title={npc.name} />
+                             {showNPCs && npcsHere.length > 0 && (
+                                <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 flex -space-x-2">
+                                    {npcsHere.map((npc, idx) => (
+                                        <div 
+                                            key={npc.id} 
+                                            onClick={(e) => { e.stopPropagation(); setSelectedNPC(npc.id); }}
+                                            className={`
+                                                w-6 h-6 rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] font-bold text-white shadow-lg z-30
+                                                cursor-pointer hover:scale-125 transition-transform
+                                                ${npc.status === 'Alive' ? 'bg-green-600' : 'bg-red-600'}
+                                            `} 
+                                            title={npc.name}
+                                            style={{ zIndex: 30 + idx }}
+                                        >
+                                            {npc.name[0]}
+                                        </div>
                                     ))}
                                 </div>
                              )}
 
-                             {/* Travel Button (only if connected) */}
-                             {!isCurrent && locations.find(l => l.id === currentLocationId)?.connectedLocationIds.includes(loc.id) && (
-                                 <button 
-                                    className="absolute -bottom-8 bg-indigo-600 text-white text-[9px] px-2 py-1 rounded shadow-lg hover:bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onTravel(loc.name);
-                                    }}
-                                    onMouseDown={(e) => e.stopPropagation()} // Prevent drag
+                             {/* Selected NPC Info Card */}
+                             {selectedNPC && npcsHere.find(n => n.id === selectedNPC) && (
+                                 <div 
+                                    className="absolute bottom-14 bg-black/90 border border-slate-600 p-2 rounded w-40 z-50 pointer-events-none animate-in fade-in zoom-in-95"
+                                    onClick={(e) => e.stopPropagation()}
                                  >
-                                     Travel
-                                 </button>
+                                     <div className="font-bold text-xs text-white mb-1">{npcsHere.find(n => n.id === selectedNPC)?.name}</div>
+                                     <div className="text-[10px] text-slate-400 italic">"{npcsHere.find(n => n.id === selectedNPC)?.internalThoughts}"</div>
+                                 </div>
+                             )}
+
+                             {/* Travel Button Logic */}
+                             {!isCurrent && (
+                                 <div className="absolute -bottom-8">
+                                     {locations.find(l => l.id === currentLocationId)?.connectedLocationIds.find(link => link.targetId === loc.id) ? (
+                                         (() => {
+                                             const connection = locations.find(l => l.id === currentLocationId)?.connectedLocationIds.find(link => link.targetId === loc.id);
+                                             if (connection?.status === 'Blocked') {
+                                                  return (
+                                                      <span className="bg-red-900/80 text-white text-[9px] px-2 py-1 rounded flex items-center gap-1">
+                                                          <Lock size={8} /> Blocked
+                                                      </span>
+                                                  )
+                                             }
+                                             return (
+                                                <button 
+                                                    className="bg-indigo-600 text-white text-[9px] px-2 py-1 rounded shadow-lg hover:bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onTravel(loc.name);
+                                                    }}
+                                                    onMouseDown={(e) => e.stopPropagation()} 
+                                                >
+                                                    <Footprints size={8} /> Go ({connection?.distance})
+                                                </button>
+                                             )
+                                         })()
+                                     ) : null}
+                                 </div>
                              )}
                         </div>
                     );

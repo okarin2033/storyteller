@@ -22,29 +22,45 @@ export interface WorldItem {
   properties: string[];
 }
 
+export interface LocationConnection {
+    targetId: string;
+    distance: number; // arbitrary units, e.g. "minutes walking"
+    status: 'Open' | 'Blocked' | 'Hidden';
+}
+
 export interface WorldLocation {
   id: string;
   name: string;
   description: string;
   type: 'City' | 'Wild' | 'Dungeon' | 'Interior';
   isVisited: boolean;
-  connectedLocationIds: string[]; // Graph structure for movement
+  connectedLocationIds: LocationConnection[]; // Graph structure for movement
+  imageUrl?: string;
 }
 
 export interface PlayerStats {
   name: string;
   hp: { current: number; max: number };
-  appearance: string; // Replaces currency
+  appearance: {
+    physical: string;
+    clothing: string;
+  };
   inventory: WorldItem[];
   statusEffects: string[];
   knownRumors: string[];
+  imageUrl?: string;
 }
 
 export interface GameState {
   turnCount: number;
   currentLocationId: string; 
   currentTime: string;
+  visualStyle: string; // Global art style setting
   
+  // New Narrative Control Fields
+  storytellerThoughts: string; // The AI's hidden plan/analysis of the plot
+  metaPreferences: string; // The player's wish for the story (e.g. "More combat", "Romance focus")
+
   player: PlayerStats;
 
   npcs: NPC[];
@@ -52,12 +68,6 @@ export interface GameState {
   
   worldLore: string[];
   activeEvents: string[];
-}
-
-export interface SceneVisual {
-  title: string;
-  description: string;
-  mood: 'Dark' | 'Bright' | 'Mysterious' | 'Dangerous' | 'Peaceful';
 }
 
 export interface SuggestedAction {
@@ -68,7 +78,6 @@ export interface SuggestedAction {
 
 export interface StorySegment {
   narrative: string;
-  sceneVisual?: SceneVisual | null;
   suggestedActions: SuggestedAction[];
   stateUpdate: Partial<GameState>;
 }
@@ -76,6 +85,6 @@ export interface StorySegment {
 export interface ChatMessage {
   role: 'user' | 'model' | 'system';
   content: string;
-  sceneVisual?: SceneVisual | null; // Attach visual to message history
   timestamp?: number;
+  sceneImage?: string; // Generated visualization of this specific turn
 }

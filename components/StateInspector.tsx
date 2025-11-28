@@ -1,9 +1,11 @@
+
 import React, { useState } from 'react';
 import { GameState, NPC, WorldItem, WorldLocation } from '../types';
-import { Eye, Brain, MapPin, Database, Package, Activity, Globe, Book, Users, ChevronRight, ChevronDown } from 'lucide-react';
+import { Eye, Brain, MapPin, Database, Package, Activity, Globe, Book, Users, ChevronRight, ChevronDown, Sparkles, Save } from 'lucide-react';
 
 interface StateInspectorProps {
   gameState: GameState;
+  onUpdatePreferences?: (newPrefs: string) => void;
 }
 
 // Helper Component for Folders
@@ -33,10 +35,17 @@ const InspectorFolder: React.FC<{
     );
 };
 
-const StateInspector: React.FC<StateInspectorProps> = ({ gameState }) => {
+const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePreferences }) => {
+  const [prefInput, setPrefInput] = useState(gameState.metaPreferences);
   
   // Helper to find location name
   const getLocationName = (id: string) => gameState.locations.find(l => l.id === id)?.name || "Unknown";
+
+  const handleBlurPrefs = () => {
+      if (onUpdatePreferences && prefInput !== gameState.metaPreferences) {
+          onUpdatePreferences(prefInput);
+      }
+  }
 
   return (
     <div className="w-full h-full bg-slate-900 border-l border-slate-700 overflow-y-auto font-sans text-sm custom-scrollbar">
@@ -48,6 +57,32 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState }) => {
       </div>
 
       <div className="flex flex-col">
+
+        {/* --- FOLDER: STORYTELLER --- */}
+        <InspectorFolder title="Storyteller & Meta" icon={<Sparkles size={14} />} defaultOpen={true}>
+            <div className="space-y-4">
+                <div>
+                    <span className="text-[10px] uppercase font-bold text-indigo-400 block mb-1">AI Story Plan</span>
+                    <div className="p-2 bg-indigo-950/30 border border-indigo-900/50 rounded text-indigo-200 italic text-xs leading-relaxed">
+                        "{gameState.storytellerThoughts}"
+                    </div>
+                </div>
+
+                <div>
+                    <span className="text-[10px] uppercase font-bold text-emerald-400 block mb-1">Your Directives (What you want)</span>
+                    <textarea 
+                        className="w-full h-24 bg-slate-950 border border-slate-700 rounded p-2 text-xs text-slate-300 focus:border-emerald-500 focus:outline-none resize-none"
+                        value={prefInput}
+                        onChange={(e) => setPrefInput(e.target.value)}
+                        onBlur={handleBlurPrefs}
+                        placeholder="Tell the AI what kind of story you want... (e.g. More mystery, less combat)"
+                    />
+                    <div className="text-[9px] text-slate-500 mt-1 flex justify-between">
+                        <span>Updates automatically on click out</span>
+                    </div>
+                </div>
+            </div>
+        </InspectorFolder>
         
         {/* --- Global Events --- */}
         <div className="p-3 bg-indigo-900/20 border-b border-indigo-900/30">
@@ -62,7 +97,7 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState }) => {
         </div>
 
         {/* --- FOLDER: CURRENT SCENE --- */}
-        <InspectorFolder title="Текущая сцена" icon={<Activity size={14} />} defaultOpen={true}>
+        <InspectorFolder title="Текущая сцена" icon={<Activity size={14} />} defaultOpen={false}>
             <div className="mb-3">
                 <span className="text-slate-500 text-xs block mb-1">Локация</span>
                 <div className="text-slate-200 font-medium flex items-center gap-2">
@@ -112,7 +147,10 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState }) => {
                             
                             {/* Connections */}
                             <div className="text-[10px] text-slate-600 mt-0.5 truncate">
-                                ↔ {loc.connectedLocationIds.map(id => getLocationName(id)).join(", ")}
+                                ↔ {loc.connectedLocationIds.map(link => {
+                                    const name = getLocationName(link.targetId);
+                                    return `${name} (${link.status === 'Blocked' ? 'X' : link.distance})`;
+                                }).join(", ")}
                             </div>
 
                             {/* NPCs in this location */}

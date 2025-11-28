@@ -34,10 +34,17 @@ const playerSchema = {
     properties: {
        name: { type: Type.STRING },
        hp: { type: Type.OBJECT, properties: { current: { type: Type.INTEGER }, max: { type: Type.INTEGER } } },
-       appearance: { type: Type.STRING },
+       appearance: { 
+           type: Type.OBJECT,
+           properties: {
+               physical: { type: Type.STRING },
+               clothing: { type: Type.STRING }
+           }
+       },
        statusEffects: { type: Type.ARRAY, items: { type: Type.STRING } },
        knownRumors: { type: Type.ARRAY, items: { type: Type.STRING } },
-       inventory: { type: Type.ARRAY, items: itemSchema }
+       inventory: { type: Type.ARRAY, items: itemSchema },
+       imageUrl: { type: Type.STRING }
     },
     required: ["name", "inventory", "hp", "appearance"]
 };
@@ -60,6 +67,16 @@ const npcSchema = {
     required: ["id", "name", "locationId", "internalThoughts"]
 };
 
+const locationConnectionSchema = {
+    type: Type.OBJECT,
+    properties: {
+        targetId: { type: Type.STRING },
+        distance: { type: Type.NUMBER, description: "Distance in meters/units" },
+        status: { type: Type.STRING, enum: ["Open", "Blocked", "Hidden"] }
+    },
+    required: ["targetId", "status"]
+};
+
 const locationSchema = {
     type: Type.OBJECT,
     properties: {
@@ -68,18 +85,10 @@ const locationSchema = {
         description: { type: Type.STRING },
         type: { type: Type.STRING, enum: ["City", "Wild", "Dungeon", "Interior"] },
         isVisited: { type: Type.BOOLEAN },
-        connectedLocationIds: { type: Type.ARRAY, items: { type: Type.STRING } }
+        connectedLocationIds: { type: Type.ARRAY, items: locationConnectionSchema },
+        imageUrl: { type: Type.STRING }
     },
     required: ["id", "name", "connectedLocationIds"]
-};
-
-const visualSchema = {
-    type: Type.OBJECT,
-    properties: {
-        title: { type: Type.STRING },
-        description: { type: Type.STRING },
-        mood: { type: Type.STRING, enum: ['Dark', 'Bright', 'Mysterious', 'Dangerous', 'Peaceful'] }
-    }
 };
 
 const actionSchema = {
@@ -91,13 +100,38 @@ const actionSchema = {
     }
 }
 
+// --- Image Generation ---
+
+export const generateImage = async (apiKey: string, prompt: string): Promise<string | null> => {
+    try {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [{ text: prompt }] }
+        });
+
+        // The model returns candidates. The first candidate has content.
+        // We look for the inlineData part.
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error("Image Gen Error", e);
+        return null;
+    }
+}
+
 // --- Story Generation ---
 
 export const generateStoryTurn = async (
   apiKey: string,
   currentState: GameState,
   history: string[],
-  playerAction: string
+  playerAction: string,
+  isDirectorMode: boolean = false
 ): Promise<StorySegment> => {
   const ai = new GoogleGenAI({ apiKey });
 
@@ -105,13 +139,15 @@ export const generateStoryTurn = async (
     type: Type.OBJECT,
     properties: {
       narrative: { type: Type.STRING },
-      sceneVisual: visualSchema,
       suggestedActions: { type: Type.ARRAY, items: actionSchema },
       updates: {
         type: Type.OBJECT,
         properties: {
           currentLocationId: { type: Type.STRING },
           currentTime: { type: Type.STRING },
+          visualStyle: { type: Type.STRING },
+          storytellerThoughts: { type: Type.STRING },
+          metaPreferences: { type: Type.STRING },
           player: playerSchema,
           npcs: { type: Type.ARRAY, items: npcSchema },
           locations: { type: Type.ARRAY, items: locationSchema },
@@ -123,22 +159,30 @@ export const generateStoryTurn = async (
     required: ["narrative", "updates", "suggestedActions"]
   };
 
+  const modeInstruction = isDirectorMode 
+    ? "MODE: DIRECTOR / GOD MODE enabled. The user Input is a META-COMMAND. Execute it immediately to alter the world state, spawn entities, or force narrative events. Ignore normal gameplay logic/limitations."
+    : "MODE: PLAYER MODE. Standard RPG logic applies.";
+
   const prompt = `
     CURRENT WORLD STATE:
     ${JSON.stringify(currentState, null, 2)}
 
-    NARRATIVE HISTORY (Last 3 turns):
+    PLAYER META-PREFERENCES (What they want from the story):
+    "${currentState.metaPreferences}"
+
+    NARRATIVE HISTORY (Full Context):
     ${history.join("\n---\n")}
 
-    PLAYER ACTION:
-    "${playerAction}"
+    ${modeInstruction}
+
+    INPUT: "${playerAction}"
     
     INSTRUCTIONS:
     1. Advance the story.
     2. Simulate NPC behavior (off-screen movement/thoughts).
     3. Update JSON state.
     4. Provide 3 suggested actions for the player.
-    5. Optionally provide a 'sceneVisual' if the scene is striking.
+    5. Update 'storytellerThoughts' with your plan for the next scenes based on 'metaPreferences'.
   `;
 
   try {
@@ -160,7 +204,6 @@ export const generateStoryTurn = async (
 
     return {
       narrative: data.narrative,
-      sceneVisual: data.sceneVisual,
       suggestedActions: data.suggestedActions || [],
       stateUpdate: data.updates
     };
@@ -186,6 +229,9 @@ export const createWorldState = async (
             turnCount: { type: Type.INTEGER },
             currentLocationId: { type: Type.STRING },
             currentTime: { type: Type.STRING },
+            visualStyle: { type: Type.STRING },
+            storytellerThoughts: { type: Type.STRING },
+            metaPreferences: { type: Type.STRING },
             player: playerSchema,
             npcs: { type: Type.ARRAY, items: npcSchema },
             locations: { type: Type.ARRAY, items: locationSchema },
@@ -201,9 +247,11 @@ export const createWorldState = async (
       Requirements:
       1. Create a protagonist player object (with HP and Appearance).
       2. Create 3-5 interesting NPCs.
-      3. Create 3-4 connected Locations.
+      3. Create 3-4 connected Locations (ensure links have targetId, distance, status).
       4. Ensure NPCs have valid 'locationId's matching the locations.
       5. Add 'worldLore' and 'activeEvents'.
+      6. Define a cohesive 'visualStyle' for image generation.
+      7. Initialize 'storytellerThoughts' (your plan) and 'metaPreferences' (defaults).
     `;
 
     // Strategy: Streaming response to prevent timeout perception
@@ -248,8 +296,6 @@ export const createWorldState = async (
             newState = JSON.parse(cleanedJson) as GameState;
         } catch (parseError) {
              onLog("JSON Parse failed on first attempt. Trying repair...");
-             // Fallback: sometimes model repeats JSON or adds extra text despite schema.
-             // We already cleaned, but let's try a simpler parse if schema enforcement failed slightly
              throw new Error("Data corruption detected during transfer.");
         }
         
@@ -298,6 +344,9 @@ function validateState(state: any) {
     // Fix missing defaults if AI forgot them
     if (!state.turnCount) state.turnCount = 1;
     if (!state.player.hp) state.player.hp = { current: 20, max: 20 };
-    if (!state.player.appearance) state.player.appearance = "Обычный путник.";
+    if (!state.player.appearance) state.player.appearance = { physical: "Неизвестно", clothing: "Неизвестно" };
     if (!state.player.inventory) state.player.inventory = [];
+    if (!state.visualStyle) state.visualStyle = "Fantasy, Detailed, Digital Art";
+    if (!state.storytellerThoughts) state.storytellerThoughts = "Analyzing input...";
+    if (!state.metaPreferences) state.metaPreferences = "Balanced adventure.";
 }
