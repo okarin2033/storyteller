@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { NPC, WorldLocation } from '../types';
 import { Search, MapPin, Brain, Heart, Target, Save, Edit2 } from 'lucide-react';
@@ -14,9 +13,9 @@ const NPCList: React.FC<NPCListProps> = ({ npcs, locations, onUpdateNPC }) => {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDesc, setEditDesc] = useState("");
 
-    const filtered = npcs.filter(n => n.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    const filtered = (npcs || []).filter(n => n.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
-    const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Unknown";
+    const getLocationName = (id: string) => (locations || []).find(l => l.id === id)?.name || "Unknown";
 
     const startEdit = (npc: NPC) => {
         setEditingId(npc.id);

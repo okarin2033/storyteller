@@ -8,20 +8,20 @@ interface WorldMapProps {
   currentLocationId: string;
   npcs: NPC[];
   onTravel: (locationName: string) => void;
-  onMaximize?: (isMax: boolean) => void;
+  onMaximize?: () => void; // Trigger external modal
+  isFullScreen?: boolean;   // Are we inside the modal?
 }
 
 interface Point { x: number; y: number }
 
-const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs, onTravel, onMaximize }) => {
+const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs, onTravel, onMaximize, isFullScreen = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<Record<string, Point>>({});
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(isFullScreen ? 1.2 : 0.8);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   
   const [showNPCs, setShowNPCs] = useState(false);
   const [selectedNPC, setSelectedNPC] = useState<string | null>(null);
-  const [isMaximized, setIsMaximized] = useState(false);
 
   // Dragging states
   const [isDraggingMap, setIsDraggingMap] = useState(false);
@@ -34,25 +34,30 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
       const newNodes = { ...prev };
       let hasChanges = false;
       
-      locations.forEach((loc, index) => {
+      (locations || []).forEach((loc, index) => {
         if (!newNodes[loc.id]) {
             hasChanges = true;
             // Place connected nodes near parents if possible
-            const connectedParentLink = loc.connectedLocationIds.find(link => newNodes[link.targetId]);
+            const connectedParentLink = (loc.connectedLocationIds || []).find(link => newNodes[link.targetId]);
             if (connectedParentLink) {
                 const parent = newNodes[connectedParentLink.targetId];
                 // Random angle
                 const angle = Math.random() * Math.PI * 2;
-                // Use defined distance if available (scaled down), else default
-                const dist = Math.max(100, (connectedParentLink.distance || 50) * 3); 
+                
+                // VISUAL DISTANCE LOGIC:
+                // Cap the visual distance. Even if it's 1000m away, we don't want it 1000px away.
+                // Min 100px, Max 250px. This keeps things compact.
+                const rawDist = connectedParentLink.distance || 50;
+                const visualDist = Math.min(250, Math.max(100, rawDist * 0.4));
+
                 newNodes[loc.id] = {
-                    x: parent.x + Math.cos(angle) * dist,
-                    y: parent.y + Math.sin(angle) * dist
+                    x: parent.x + Math.cos(angle) * visualDist,
+                    y: parent.y + Math.sin(angle) * visualDist
                 };
             } else {
                 // Spiral layout for initial or disconnected
-                const angle = index * 0.5;
-                const r = 100 + (index * 50);
+                const angle = index * 0.8;
+                const r = 100 + (index * 60);
                 newNodes[loc.id] = {
                     x: Math.cos(angle) * r,
                     y: Math.sin(angle) * r
@@ -109,21 +114,19 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
       }
   };
 
+  // Center once when nodes are ready
   useEffect(() => {
-     if (!isDraggingMap && !isDraggingNode && locations.length > 0) {
-         centerOnPlayer();
+     if (!isDraggingMap && !isDraggingNode && (locations || []).length > 0 && Object.keys(nodes).length > 0) {
+         // Only center if we haven't moved yet (offset is 0,0) or if it's the very first render
+         if (offset.x === 0 && offset.y === 0) {
+            centerOnPlayer();
+         }
      }
-  }, [currentLocationId, locations.length === 0, isMaximized]); 
-
-  const toggleMaximize = () => {
-      const newState = !isMaximized;
-      setIsMaximized(newState);
-      if (onMaximize) onMaximize(newState);
-  };
+  }, [currentLocationId, Object.keys(nodes).length, isFullScreen]); 
 
   return (
     <div 
-        className={`bg-slate-900 relative overflow-hidden select-none border-l border-slate-800 ${isMaximized ? 'fixed inset-0 z-50' : 'w-full h-full'}`} 
+        className={`bg-slate-900 relative overflow-hidden select-none w-full h-full ${isFullScreen ? 'cursor-grab active:cursor-grabbing' : ''}`} 
         ref={containerRef}
     >
         
@@ -137,16 +140,19 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                 {showNPCs ? <Eye size={16} /> : <EyeOff size={16} />}
             </button>
             <div className="h-px bg-slate-700 my-1" />
-            <button onClick={() => setScale(s => Math.min(s + 0.1, 2))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomIn size={16} /></button>
+            <button onClick={() => setScale(s => Math.min(s + 0.1, 3))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomIn size={16} /></button>
             <button onClick={() => setScale(s => Math.max(s - 0.1, 0.2))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomOut size={16} /></button>
-            <button onClick={centerOnPlayer} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><Move size={16} /></button>
-            <button onClick={toggleMaximize} className="p-2 bg-slate-800 text-indigo-400 rounded shadow hover:bg-slate-700 mt-2">
-                {isMaximized ? <Minimize size={16} /> : <Maximize size={16} />}
-            </button>
+            <button onClick={centerOnPlayer} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700" title="Center on Player"><Move size={16} /></button>
+            
+            {onMaximize && (
+                <button onClick={onMaximize} className="p-2 bg-slate-800 text-indigo-400 rounded shadow hover:bg-slate-700 mt-2">
+                    {isFullScreen ? <Minimize size={16} /> : <Maximize size={16} />}
+                </button>
+            )}
         </div>
 
         <div className="absolute top-4 left-4 z-20 bg-black/50 px-3 py-1 rounded text-[10px] text-slate-400 pointer-events-none border border-slate-700 backdrop-blur-sm">
-            {isMaximized ? "Fullscreen Mode" : "Drag to pan"}
+            {isFullScreen ? "Fullscreen Map" : "Drag to pan"}
         </div>
 
         <div 
@@ -167,8 +173,8 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
             >
                 {/* Connections */}
                 <svg className="absolute top-[-5000px] left-[-5000px] w-[10000px] h-[10000px] pointer-events-none">
-                    {locations.map(loc => 
-                        loc.connectedLocationIds.map(link => {
+                    {(locations || []).map(loc => 
+                        (loc.connectedLocationIds || []).map(link => {
                             const start = nodes[loc.id];
                             const end = nodes[link.targetId];
                             if (!start || !end) return null;
@@ -180,15 +186,16 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                                         x1={5000 + start.x} y1={5000 + start.y}
                                         x2={5000 + end.x} y2={5000 + end.y}
                                         stroke={link.status === 'Blocked' ? '#ef4444' : '#64748b'} 
-                                        strokeWidth={link.status === 'Blocked' ? 3 : 2} 
+                                        strokeWidth={link.status === 'Blocked' ? 3 / scale : 2 / scale} 
                                         strokeDasharray={link.status === 'Blocked' ? "0" : "5 5"}
                                         opacity={0.6}
                                     />
                                     {/* Distance Label */}
                                     <rect 
-                                        x={5000 + (start.x + end.x) / 2 - 10} 
-                                        y={5000 + (start.y + end.y) / 2 - 8}
-                                        width="20" height="16" fill="#0f172a" rx="4"
+                                        x={5000 + (start.x + end.x) / 2 - 14} 
+                                        y={5000 + (start.y + end.y) / 2 - 10}
+                                        width="28" height="20" fill="#0f172a" rx="4"
+                                        stroke="#1e293b" strokeWidth="1"
                                     />
                                     <text
                                         x={5000 + (start.x + end.x) / 2}
@@ -196,6 +203,7 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                                         fill="#94a3b8"
                                         fontSize="10"
                                         textAnchor="middle"
+                                        className="font-mono font-bold"
                                     >
                                         {link.distance}
                                     </text>
@@ -206,11 +214,11 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                 </svg>
 
                 {/* Nodes */}
-                {locations.map(loc => {
+                {(locations || []).map(loc => {
                     const pos = nodes[loc.id];
                     if (!pos) return null;
                     const isCurrent = loc.id === currentLocationId;
-                    const npcsHere = npcs.filter(n => n.locationId === loc.id);
+                    const npcsHere = (npcs || []).filter(n => n.locationId === loc.id);
 
                     return (
                         <div 
@@ -272,9 +280,9 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                              {/* Travel Button Logic */}
                              {!isCurrent && (
                                  <div className="absolute -bottom-8">
-                                     {locations.find(l => l.id === currentLocationId)?.connectedLocationIds.find(link => link.targetId === loc.id) ? (
+                                     {(locations || []).find(l => l.id === currentLocationId)?.connectedLocationIds?.find(link => link.targetId === loc.id) ? (
                                          (() => {
-                                             const connection = locations.find(l => l.id === currentLocationId)?.connectedLocationIds.find(link => link.targetId === loc.id);
+                                             const connection = (locations || []).find(l => l.id === currentLocationId)?.connectedLocationIds?.find(link => link.targetId === loc.id);
                                              if (connection?.status === 'Blocked') {
                                                   return (
                                                       <span className="bg-red-900/80 text-white text-[9px] px-2 py-1 rounded flex items-center gap-1">

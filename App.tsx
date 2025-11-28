@@ -7,7 +7,8 @@ import WorldMap from './components/WorldMap';
 import NPCList from './components/NPCList';
 import SettingsModal from './components/SettingsModal';
 import CharacterModal from './components/CharacterModal';
-import { generateStoryTurn, createWorldState, generateImage } from './services/geminiService';
+import MapModal from './components/MapModal';
+import { generateStoryTurn, createWorldState, generateImage, sanitizeStateForAi } from './services/geminiService';
 import { GameState, NPC, WorldLocation, SuggestedAction, ChatMessage, SaveFile } from './types';
 import { INITIAL_GAME_STATE } from './constants';
 import { Send, BookOpen, Sparkles, Play, Terminal, Map as MapIcon, Database, RotateCcw, Users, Settings as SettingsIcon, ToggleLeft, ToggleRight, Menu, Info, X, Upload } from 'lucide-react';
@@ -41,6 +42,7 @@ const App: React.FC = () => {
   const [isDirectorMode, setIsDirectorMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showCharacterModal, setShowCharacterModal] = useState(false);
+  const [showMapModal, setShowMapModal] = useState(false);
   
   // Mobile Drawers
   const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
@@ -65,14 +67,27 @@ const App: React.FC = () => {
   // --- SAVE / LOAD SYSTEM ---
 
   const handleExportSave = () => {
+      // Clean up the state before saving (remove large images)
+      const cleanGameState = sanitizeStateForAi(gameState);
+      const cleanStateHistory = stateHistory.map(sanitizeStateForAi);
+
       const saveFile: SaveFile = {
           version: 1,
           timestamp: Date.now(),
           name: gameState.player.name,
-          gameState: gameState,
-          history: history,
-          stateHistory: stateHistory
+          gameState: cleanGameState,
+          history: history, // History text remains, but we might want to strip sceneImages too if strictly no images.
+          stateHistory: cleanStateHistory
       };
+
+      // Optional: Strip scene images from history if we want a TRULY text-only save file
+      saveFile.history = saveFile.history.map(msg => {
+          if (msg.sceneImage) {
+              const { sceneImage, ...rest } = msg;
+              return rest;
+          }
+          return msg;
+      });
 
       const blob = new Blob([JSON.stringify(saveFile, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -104,7 +119,14 @@ const App: React.FC = () => {
                   throw new Error("Invalid save file format.");
               }
 
-              setGameState(saveFile.gameState);
+              // Ensure arrays exist in imported state
+              const safeState = saveFile.gameState;
+              if (!safeState.locations) safeState.locations = [];
+              if (!safeState.npcs) safeState.npcs = [];
+              if (!safeState.player.inventory) safeState.player.inventory = [];
+              if (!safeState.activeEvents) safeState.activeEvents = [];
+
+              setGameState(safeState);
               setHistory(saveFile.history);
               setStateHistory(saveFile.stateHistory || []);
               setMode('GAME');
@@ -134,9 +156,15 @@ const App: React.FC = () => {
           
           setGameState(newState);
           setStateHistory([]); 
+          
+          // Format opening scene: it can now be string[] or string
+          const openingContent = Array.isArray(newState.openingScene) 
+              ? newState.openingScene.join('\n\n')
+              : newState.openingScene || "Welcome to the world.";
+
           setHistory([{ 
               role: 'model', 
-              content: `**${newState.currentTime}**\n\nМир создан. Вы — ${newState.player.name}.\n${newState.locations.find(l => l.id === newState.currentLocationId)?.description}`
+              content: openingContent
           }]);
           setMode('GAME');
       } catch (err: any) {
@@ -149,7 +177,10 @@ const App: React.FC = () => {
   const handleStartDefault = () => {
       setGameState(INITIAL_GAME_STATE);
       setStateHistory([]);
-      setHistory([{ role: 'model', content: "Дождь барабанит по крыше таверны «Ржавый Якорь»..." }]);
+      const intro = Array.isArray(INITIAL_GAME_STATE.openingScene) 
+        ? INITIAL_GAME_STATE.openingScene.join('\n\n') 
+        : "Welcome.";
+      setHistory([{ role: 'model', content: intro }]);
       setMode('GAME');
   }
 
@@ -158,7 +189,7 @@ const App: React.FC = () => {
   const handleUpdateNPC = (id: string, updates: Partial<NPC>) => {
       setGameState(prev => ({
           ...prev,
-          npcs: prev.npcs.map(n => n.id === id ? { ...n, ...updates } : n)
+          npcs: (prev.npcs || []).map(n => n.id === id ? { ...n, ...updates } : n)
       }));
   };
   
@@ -175,7 +206,7 @@ const App: React.FC = () => {
       if (imageUrl) {
           setGameState(prev => ({
               ...prev,
-              locations: prev.locations.map(l => l.id === locId ? { ...l, imageUrl } : l)
+              locations: (prev.locations || []).map(l => l.id === locId ? { ...l, imageUrl } : l)
           }));
       }
   };
@@ -223,6 +254,11 @@ const App: React.FC = () => {
     setError(null);
     setIsProcessing(true);
     
+    // Defensive check before calculating highlight data
+    const safeNPCs = currentState.npcs || [];
+    const safeInventory = currentState.player?.inventory || [];
+    const safeEffects = currentState.player?.statusEffects || [];
+
     if (!stateOverride) {
         setStateHistory(prev => [...prev, gameState]);
     }
@@ -231,6 +267,7 @@ const App: React.FC = () => {
     setHistory(newHistory as ChatMessage[]);
 
     try {
+      // NOTE: History sanitization (slicing) happens inside generateStoryTurn now
       const narrativeContext = newHistory.map(h => 
         `${h.role === 'user' ? (isDirectorMode ? 'DIRECTOR' : 'PLAYER') : 'GM'}: ${h.content}`
       );
@@ -238,9 +275,9 @@ const App: React.FC = () => {
       const result = await generateStoryTurn(apiKey, currentState, narrativeContext, actionText, isDirectorMode);
 
       setGameState(prevState => {
-        const updates = result.stateUpdate;
+        const updates = result.stateUpdate || {};
         
-        let updatedNPCs = [...prevState.npcs];
+        let updatedNPCs = [...(prevState.npcs || [])];
         if (updates.npcs) {
             updates.npcs.forEach((uNPC: Partial<NPC>) => {
                 const idx = updatedNPCs.findIndex(n => n.id === uNPC.id);
@@ -249,7 +286,7 @@ const App: React.FC = () => {
             });
         }
 
-        let updatedLocations = [...prevState.locations];
+        let updatedLocations = [...(prevState.locations || [])];
         if (updates.locations) {
             updates.locations.forEach((uLoc: Partial<WorldLocation>) => {
                 const idx = updatedLocations.findIndex(l => l.id === uLoc.id);
@@ -257,13 +294,22 @@ const App: React.FC = () => {
                     updatedLocations[idx] = { 
                         ...updatedLocations[idx], 
                         ...uLoc,
-                        imageUrl: uLoc.imageUrl || updatedLocations[idx].imageUrl 
+                        imageUrl: uLoc.imageUrl || updatedLocations[idx].imageUrl,
+                        connectedLocationIds: uLoc.connectedLocationIds || updatedLocations[idx].connectedLocationIds || []
                     };
                 } else if (uLoc.id && uLoc.name) {
-                    updatedLocations.push(uLoc as WorldLocation);
+                    updatedLocations.push({ ...uLoc, connectedLocationIds: uLoc.connectedLocationIds || [] } as WorldLocation);
                 }
             });
         }
+        
+        // Safe arrays merging
+        const prevLore = prevState.worldLore || [];
+        const newLore = updates.worldLore || [];
+        const mergedLore = [...prevLore, ...newLore.filter(l => !prevLore.includes(l))];
+
+        const prevEvents = prevState.activeEvents || [];
+        const newEvents = updates.activeEvents || prevEvents;
 
         return {
             ...prevState,
@@ -272,12 +318,15 @@ const App: React.FC = () => {
             player: { 
                 ...prevState.player, 
                 ...updates.player,
-                imageUrl: updates.player?.imageUrl || prevState.player.imageUrl 
+                imageUrl: updates.player?.imageUrl || prevState.player.imageUrl,
+                inventory: updates.player?.inventory || prevState.player.inventory || [],
+                statusEffects: updates.player?.statusEffects || prevState.player.statusEffects || [],
+                knownRumors: updates.player?.knownRumors || prevState.player.knownRumors || []
             },
             npcs: updatedNPCs,
             locations: updatedLocations,
-            worldLore: updates.worldLore ? [...prevState.worldLore, ...updates.worldLore.filter(l => !prevState.worldLore.includes(l))] : prevState.worldLore,
-            activeEvents: updates.activeEvents || prevState.activeEvents,
+            worldLore: mergedLore,
+            activeEvents: newEvents,
             storytellerThoughts: updates.storytellerThoughts || prevState.storytellerThoughts,
             metaPreferences: updates.metaPreferences || prevState.metaPreferences
         };
@@ -287,7 +336,7 @@ const App: React.FC = () => {
           role: 'model', 
           content: result.narrative
       }]);
-      setSuggestedActions(result.suggestedActions);
+      setSuggestedActions(result.suggestedActions || []);
 
     } catch (err: any) {
       setError(err.message || "Something went wrong.");
@@ -348,10 +397,11 @@ const App: React.FC = () => {
     }
   };
 
+  // Safe derivation of highlight data with empty array checks
   const highlightData = {
-      npcNames: gameState.npcs.map(n => n.name),
-      itemNames: gameState.player.inventory.map(i => i.name),
-      effectNames: gameState.player.statusEffects
+      npcNames: (gameState.npcs || []).map(n => n.name),
+      itemNames: (gameState.player?.inventory || []).map(i => i.name),
+      effectNames: gameState.player?.statusEffects || []
   };
 
   if (mode === 'MENU') {
@@ -444,6 +494,16 @@ const App: React.FC = () => {
           />
       )}
 
+      {showMapModal && (
+          <MapModal
+              locations={gameState.locations || []}
+              currentLocationId={gameState.currentLocationId}
+              npcs={gameState.npcs || []}
+              onTravel={handleTravel}
+              onClose={() => setShowMapModal(false)}
+          />
+      )}
+
       {/* --- MOBILE DRAWERS --- */}
       <div className={`fixed inset-0 z-40 lg:hidden transition-opacity duration-300 ${isLeftDrawerOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setIsLeftDrawerOpen(false)} />
@@ -451,7 +511,7 @@ const App: React.FC = () => {
              <button onClick={() => setIsLeftDrawerOpen(false)} className="absolute top-2 right-2 p-2 text-slate-400 hover:text-white"><X size={20}/></button>
              <LeftPanel 
                 player={gameState.player} 
-                location={gameState.locations.find(l => l.id === gameState.currentLocationId)}
+                location={(gameState.locations || []).find(l => l.id === gameState.currentLocationId)}
                 time={gameState.currentTime}
                 onItemUse={handleItemUse} 
                 onGenerateLocationImage={handleGenerateLocationImage}
@@ -472,8 +532,8 @@ const App: React.FC = () => {
                   <button onClick={() => setRightTab('GOD')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'GOD' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>God</button>
               </div>
               <div className="flex-1 relative overflow-hidden">
-                  {rightTab === 'MAP' && <WorldMap locations={gameState.locations} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs} onTravel={handleTravel} />}
-                  {rightTab === 'NPC' && <NPCList npcs={gameState.npcs} locations={gameState.locations} onUpdateNPC={handleUpdateNPC} />}
+                  {rightTab === 'MAP' && <WorldMap locations={gameState.locations || []} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs || []} onTravel={handleTravel} onMaximize={() => setShowMapModal(true)} />}
+                  {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} />}
                   {rightTab === 'GOD' && <StateInspector gameState={gameState} onUpdatePreferences={handleUpdatePreferences} />}
               </div>
           </div>
@@ -483,7 +543,7 @@ const App: React.FC = () => {
       <div className="hidden lg:block w-72 h-full z-10 shadow-xl border-r border-slate-800 bg-slate-950">
         <LeftPanel 
             player={gameState.player} 
-            location={gameState.locations.find(l => l.id === gameState.currentLocationId)}
+            location={(gameState.locations || []).find(l => l.id === gameState.currentLocationId)}
             time={gameState.currentTime}
             onItemUse={handleItemUse} 
             onGenerateLocationImage={handleGenerateLocationImage}
@@ -499,7 +559,7 @@ const App: React.FC = () => {
              <div className="flex items-center gap-3">
                  <button onClick={() => setIsLeftDrawerOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white"><Menu size={20} /></button>
                  <button onClick={() => setMode('MENU')} className="hidden lg:block p-2 text-slate-400 hover:text-white"><BookOpen size={18} /></button>
-                 <span className="font-heading font-bold text-slate-200 truncate max-w-[150px] sm:max-w-xs">{gameState.locations.find(l => l.id === gameState.currentLocationId)?.name}</span>
+                 <span className="font-heading font-bold text-slate-200 truncate max-w-[150px] sm:max-w-xs">{(gameState.locations || []).find(l => l.id === gameState.currentLocationId)?.name}</span>
              </div>
              <div className="flex items-center gap-2">
                  <button 
@@ -579,8 +639,8 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex-1 relative overflow-hidden">
-              {rightTab === 'MAP' && <WorldMap locations={gameState.locations} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs} onTravel={handleTravel} />}
-              {rightTab === 'NPC' && <NPCList npcs={gameState.npcs} locations={gameState.locations} onUpdateNPC={handleUpdateNPC} />}
+              {rightTab === 'MAP' && <WorldMap locations={gameState.locations || []} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs || []} onTravel={handleTravel} onMaximize={() => setShowMapModal(true)} />}
+              {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} />}
               {rightTab === 'GOD' && <StateInspector gameState={gameState} onUpdatePreferences={handleUpdatePreferences} />}
           </div>
       </div>

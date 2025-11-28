@@ -1,5 +1,4 @@
 
-
 import React, { useState } from 'react';
 import { PlayerStats } from '../types';
 import { Heart, Package, Shield, User, Shirt, Camera, Loader2, RefreshCw } from 'lucide-react';
@@ -23,8 +22,9 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
     }
 
     return (
-        <div className="flex flex-col h-full font-sans text-slate-200">
-            {/* Stats Header */}
+        <div className="flex flex-col h-full font-sans text-slate-200 overflow-y-auto custom-scrollbar pr-2">
+            
+            {/* Portrait & HP - No longer fixed */}
             <div className="mb-4 space-y-3">
                 <div className="flex items-start justify-between">
                     <h2 className="font-heading font-bold text-lg">{player.name}</h2>
@@ -40,9 +40,8 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
                 </div>
 
                 {player.imageUrl ? (
-                    <div className="w-full h-32 rounded-lg overflow-hidden border border-slate-700 mb-2 relative group">
+                    <div className="w-full h-32 rounded-lg overflow-hidden border border-slate-700 mb-2 relative group flex-shrink-0">
                         <img src={player.imageUrl} alt="Character" className="w-full h-full object-cover" />
-                        {/* Overlay for Regeneration */}
                         {onGenerateImage && (
                             <div className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button 
@@ -72,7 +71,7 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
                     </div>
                 </div>
 
-                {/* Appearance (Split) */}
+                {/* Appearance - part of flow now */}
                 <div className="space-y-2 text-xs">
                      <div className="bg-slate-800/50 p-2 rounded border border-slate-700/50">
                         <div className="flex items-center gap-1 text-slate-400 font-bold mb-1">
@@ -93,15 +92,15 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
 
             <div className="h-px bg-slate-800 mb-4" />
 
-            <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-4">
+            <div className="space-y-4 pb-4">
                  {/* Status Effects */}
                 <div>
                     <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
                         <Shield size={10} /> Состояние
                     </h3>
                     <div className="flex flex-wrap gap-2">
-                        {player.statusEffects.length > 0 ? (
-                            player.statusEffects.map((effect, i) => (
+                        {(player.statusEffects || []).length > 0 ? (
+                            (player.statusEffects || []).map((effect, i) => (
                                 <span key={i} className="px-2 py-1 bg-indigo-900/30 border border-indigo-700/50 text-indigo-200 text-xs rounded shadow-sm">
                                     {effect}
                                 </span>
@@ -118,7 +117,7 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
                         <Package size={10} /> Инвентарь
                     </h3>
                     <div className="space-y-2">
-                        {player.inventory.map((item, i) => (
+                        {(player.inventory || []).map((item, i) => (
                             <button 
                                 key={i}
                                 onClick={() => onItemUse(item.name)}
@@ -135,7 +134,7 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
                                 <p className="text-[10px] text-slate-500 mt-1 truncate">{item.description}</p>
                             </button>
                         ))}
-                        {player.inventory.length === 0 && (
+                        {(player.inventory || []).length === 0 && (
                              <div className="text-center py-4 border border-dashed border-slate-800 rounded text-slate-600 text-xs">
                                  Пусто
                              </div>

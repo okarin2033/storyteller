@@ -110,7 +110,7 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ player, location, time, onItemUse
             </div>
 
             {/* Character Sheet */}
-            <div className="flex-1 p-4 overflow-hidden">
+            <div className="flex-1 p-4 overflow-hidden flex flex-col min-h-0">
                 <CharacterSheet 
                     player={player} 
                     onItemUse={onItemUse} 

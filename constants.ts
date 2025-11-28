@@ -9,6 +9,11 @@ export const INITIAL_GAME_STATE: GameState = {
   visualStyle: "Dark Fantasy, Realistic Oil Painting, Moody Lighting",
   storytellerThoughts: "The player has just arrived. I need to establish the atmosphere and introduce the hook.",
   metaPreferences: "Focus on mystery and exploration. Keep combat rare but deadly.",
+  openingScene: [
+      "Дождь барабанит по крыше таверны «Ржавый Якорь». Ветер завывает в трубах, как голодный волк, требующий впустить его внутрь.",
+      "Вы сидите в углу, сжимая в руках кружку разбавленного эля. Тепло очага едва доходит до вас, но это лучше, чем холод снаружи.",
+      "Дверь со скрипом отворяется..."
+  ],
   player: {
     name: "Wanderer",
     hp: { current: 20, max: 20 },
@@ -98,7 +103,12 @@ Your goal is to simulate a persistent, living world that GROWS.
 
 ### CORE RESPONSIBILITIES:
 
-1. **NARRATIVE**: Write atmospheric, mature Russian prose. 
+1. **NARRATIVE STYLE (CRITICAL)**: 
+   - Write **EXTENSIVE, ATMOSPHERIC, MATURE Russian prose**. 
+   - **DO NOT be concise.** Being concise is failure.
+   - Aim for **3-4 paragraphs** per response.
+   - Describe sensory details (smell, temperature, light, sound) in depth.
+   - Dive into the internal psychology of the moment.
    - **Dialogues**: Distinct voices for NPCs. 
 
 2. **STORYTELLER MIND (Meta-Control)**:
@@ -131,18 +141,19 @@ Return a JSON object matching the GameState schema + narrative fields.
 `;
 
 export const WORLD_GEN_INSTRUCTION = `
-You are a World Architect. 
-Generate a comprehensive but COMPACT starting state for a text-based RPG based on the user's prompt.
+You are a World Architect and Master Storyteller. 
+Generate a comprehensive starting state for a text-based RPG based on the user's prompt.
 Language: Russian.
 
 CRITICAL CONSTRAINTS:
 1. Return ONLY valid JSON matching the GameState interface.
-2. KEEP DESCRIPTIONS CONCISE (max 1-2 sentences per item/location) to avoid JSON size limits.
-3. Ensure the map is connected (connectedLocationIds must be valid objects with targetId, distance, status).
-4. Player needs HP and Appearance (physical + clothing).
-5. Set a visualStyle appropriate for the genre.
-6. Initialize 'storytellerThoughts' with a plan for the opening hook.
-7. Initialize 'metaPreferences' with defaults (e.g. "Balanced adventure").
+2. **NARRATIVE**: You MUST generate a field 'openingScene'. This MUST be an **ARRAY OF STRINGS**, where each string is a paragraph of the opening. Total length should be significant (at least 3-4 paragraphs).
+3. **METADATA**: Keep item/NPC descriptions reasonably short (1-2 sentences) to save JSON space, but make the 'openingScene' very long.
+4. Ensure the map is connected (connectedLocationIds must be valid objects with targetId, distance, status).
+5. Player needs HP and Appearance (physical + clothing).
+6. Set a visualStyle appropriate for the genre.
+7. Initialize 'storytellerThoughts' with a plan for the opening hook.
+8. Initialize 'metaPreferences' with defaults (e.g. "Balanced adventure").
 `;
 
 export const GENERATION_LOGS = [];

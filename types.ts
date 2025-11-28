@@ -60,6 +60,7 @@ export interface GameState {
   // New Narrative Control Fields
   storytellerThoughts: string; // The AI's hidden plan/analysis of the plot
   metaPreferences: string; // The player's wish for the story (e.g. "More combat", "Romance focus")
+  openingScene?: string[]; // CHANGED: Array of paragraphs for stability
 
   player: PlayerStats;
 

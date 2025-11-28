@@ -46,8 +46,8 @@ const CharacterModal: React.FC<CharacterModalProps> = ({ player, onClose, visual
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-800">
                     <h3 className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2"><Shield size={12} /> Status Effects</h3>
                     <div className="flex flex-wrap gap-2">
-                        {player.statusEffects.length > 0 ? (
-                             player.statusEffects.map((e, i) => (
+                        {(player.statusEffects || []).length > 0 ? (
+                             (player.statusEffects || []).map((e, i) => (
                                  <span key={i} className="px-2 py-1 bg-red-950/40 border border-red-900 text-red-300 text-xs rounded">{e}</span>
                              ))
                         ) : (
@@ -91,10 +91,10 @@ const CharacterModal: React.FC<CharacterModalProps> = ({ player, onClose, visual
                 {/* Inventory */}
                 <div>
                      <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2 border-b border-slate-800 pb-2">
-                        <Package size={16} /> Inventory ({player.inventory.length} items)
+                        <Package size={16} /> Inventory ({(player.inventory || []).length} items)
                      </h3>
                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                         {player.inventory.map((item, i) => (
+                         {(player.inventory || []).map((item, i) => (
                              <div key={i} className="flex flex-col bg-slate-950 p-3 rounded-lg border border-slate-800 hover:border-indigo-500/30 transition-colors">
                                  <div className="flex justify-between items-start mb-1">
                                      <span className="font-bold text-slate-200">{item.name}</span>
@@ -102,14 +102,14 @@ const CharacterModal: React.FC<CharacterModalProps> = ({ player, onClose, visual
                                  </div>
                                  <span className="text-xs text-slate-500 mb-2">{item.description}</span>
                                  <div className="flex flex-wrap gap-1 mt-auto">
-                                     {item.properties.map((p, idx) => (
+                                     {(item.properties || []).map((p, idx) => (
                                          <span key={idx} className="text-[9px] uppercase font-bold text-slate-600 bg-slate-900 px-1 rounded">{p}</span>
                                      ))}
                                  </div>
                              </div>
                          ))}
                      </div>
-                     {player.inventory.length === 0 && (
+                     {(player.inventory || []).length === 0 && (
                          <div className="text-center py-10 border-2 border-dashed border-slate-800 rounded-xl text-slate-600">Empty Inventory</div>
                      )}
                 </div>
@@ -120,13 +120,13 @@ const CharacterModal: React.FC<CharacterModalProps> = ({ player, onClose, visual
                         <Activity size={16} /> Known Rumors
                      </h3>
                      <ul className="space-y-2">
-                         {player.knownRumors.map((r, i) => (
+                         {(player.knownRumors || []).map((r, i) => (
                              <li key={i} className="flex gap-3 text-slate-300 bg-slate-800/20 p-3 rounded-lg">
                                  <span className="text-amber-500 font-serif text-xl">“</span>
                                  <span className="italic">{r}</span>
                              </li>
                          ))}
-                         {player.knownRumors.length === 0 && <li className="text-slate-600 italic">No rumors heard yet...</li>}
+                         {(player.knownRumors || []).length === 0 && <li className="text-slate-600 italic">No rumors heard yet...</li>}
                      </ul>
                 </div>
 

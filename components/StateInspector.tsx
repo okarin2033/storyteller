@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { GameState, NPC, WorldItem, WorldLocation } from '../types';
 import { Eye, Brain, MapPin, Database, Package, Activity, Globe, Book, Users, ChevronRight, ChevronDown, Sparkles, Save } from 'lucide-react';
@@ -39,7 +38,7 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
   const [prefInput, setPrefInput] = useState(gameState.metaPreferences);
   
   // Helper to find location name
-  const getLocationName = (id: string) => gameState.locations.find(l => l.id === id)?.name || "Unknown";
+  const getLocationName = (id: string) => (gameState.locations || []).find(l => l.id === id)?.name || "Unknown";
 
   const handleBlurPrefs = () => {
       if (onUpdatePreferences && prefInput !== gameState.metaPreferences) {
@@ -87,9 +86,9 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
         {/* --- Global Events --- */}
         <div className="p-3 bg-indigo-900/20 border-b border-indigo-900/30">
             <div className="text-[10px] text-indigo-300 uppercase font-bold mb-1">Глобальные события</div>
-            {gameState.activeEvents.length > 0 ? (
+            {(gameState.activeEvents || []).length > 0 ? (
                  <ul className="list-disc pl-3 text-xs text-indigo-100">
-                    {gameState.activeEvents.map((e, i) => <li key={i}>{e}</li>)}
+                    {(gameState.activeEvents || []).map((e, i) => <li key={i}>{e}</li>)}
                  </ul>
             ) : (
                 <span className="text-slate-500 text-xs italic">Мир спокоен</span>
@@ -109,8 +108,8 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
             
             <div className="text-slate-500 text-xs block mb-1">Герой ({gameState.player.name})</div>
             <div className="flex flex-wrap gap-1 mb-2">
-                {gameState.player.statusEffects.length > 0 ? (
-                    gameState.player.statusEffects.map((e, i) => (
+                {(gameState.player.statusEffects || []).length > 0 ? (
+                    (gameState.player.statusEffects || []).map((e, i) => (
                         <span key={i} className="px-1.5 py-0.5 bg-red-900/30 border border-red-800 text-red-300 rounded text-[10px]">{e}</span>
                     ))
                 ) : <span className="text-slate-600 text-[10px] italic">Статус в норме</span>}
@@ -119,7 +118,7 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
             <div className="mt-2 pt-2 border-t border-slate-700/50">
                  <div className="text-slate-500 text-xs mb-1 flex items-center gap-1"><Package size={10} /> Инвентарь</div>
                  <div className="space-y-1">
-                    {gameState.player.inventory.map((item, i) => (
+                    {(gameState.player.inventory || []).map((item, i) => (
                         <div key={i} className="flex justify-between text-xs text-slate-300 bg-slate-800/40 px-2 py-1 rounded">
                             <span>{item.name}</span>
                             <span className="text-slate-500">x{item.quantity}</span>
@@ -132,8 +131,8 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
         {/* --- FOLDER: WORLD ATLAS (Who is where?) --- */}
         <InspectorFolder title="Атлас Мира" icon={<Globe size={14} />} defaultOpen={true}>
             <div className="space-y-4">
-                {gameState.locations.map(loc => {
-                    const npcsHere = gameState.npcs.filter(n => n.locationId === loc.id);
+                {(gameState.locations || []).map(loc => {
+                    const npcsHere = (gameState.npcs || []).filter(n => n.locationId === loc.id);
                     const isCurrent = loc.id === gameState.currentLocationId;
                     
                     return (
@@ -147,7 +146,7 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
                             
                             {/* Connections */}
                             <div className="text-[10px] text-slate-600 mt-0.5 truncate">
-                                ↔ {loc.connectedLocationIds.map(link => {
+                                ↔ {(loc.connectedLocationIds || []).map(link => {
                                     const name = getLocationName(link.targetId);
                                     return `${name} (${link.status === 'Blocked' ? 'X' : link.distance})`;
                                 }).join(", ")}
@@ -180,7 +179,7 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
         {/* --- FOLDER: CHARACTERS DETAIL --- */}
         <InspectorFolder title="Психология NPC" icon={<Users size={14} />}>
              <div className="space-y-3">
-            {gameState.npcs.map((npc: NPC) => (
+            {(gameState.npcs || []).map((npc: NPC) => (
               <div key={npc.id} className="bg-slate-800/40 p-3 rounded border border-slate-700/50">
                 <div className="flex justify-between items-start mb-2">
                   <span className="font-bold text-slate-300">{npc.name}</span>
@@ -211,14 +210,14 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
         {/* --- FOLDER: LORE --- */}
         <InspectorFolder title="Архивы Знаний" icon={<Book size={14} />}>
             <ul className="list-disc list-outside pl-4 space-y-2 text-xs text-slate-400">
-                {gameState.worldLore.map((fact, i) => (
+                {(gameState.worldLore || []).map((fact, i) => (
                     <li key={i}>{fact}</li>
                 ))}
             </ul>
              <div className="mt-4 pt-2 border-t border-slate-700">
                 <span className="text-slate-500 text-[10px] uppercase font-bold">Слухи</span>
                 <ul className="mt-1 space-y-1">
-                    {gameState.player.knownRumors.map((r, i) => (
+                    {(gameState.player.knownRumors || []).map((r, i) => (
                          <li key={i} className="text-xs text-amber-500/70 italic">"{r}"</li>
                     ))}
                 </ul>

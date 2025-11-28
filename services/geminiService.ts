@@ -1,21 +1,51 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { GameState, StorySegment } from "../types";
 import { SYSTEM_INSTRUCTION, WORLD_GEN_INSTRUCTION } from "../constants";
 
 const cleanJson = (text: string): string => {
-  // 1. Remove markdown code blocks
-  let cleaned = text.replace(/```json/g, '').replace(/```/g, '');
-  // 2. Find the first '{' and the last '}' to ignore preamble/postscript text
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
+  // 1. Remove markdown code blocks (case insensitive)
+  let cleaned = text.replace(/```json/gi, '').replace(/```/g, '');
   
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  // 2. Aggressively find the outer-most curly braces to ignore "Here is the JSON:" preambles
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (match) {
+      return match[0];
   }
   
   return cleaned.trim();
 };
+
+/**
+ * Creates a deep copy of the state and removes all imageUrl fields (Base64 strings)
+ * to prevent context overflow and save file bloating.
+ */
+export const sanitizeStateForAi = (state: GameState): GameState => {
+    const cleanState = JSON.parse(JSON.stringify(state)); // Deep clone
+
+    // Clean Player
+    if (cleanState.player) {
+        delete cleanState.player.imageUrl;
+    }
+
+    // Clean Locations
+    if (cleanState.locations) {
+        cleanState.locations.forEach((loc: any) => {
+            delete loc.imageUrl;
+        });
+    }
+
+    return cleanState;
+};
+
+// --- Safety Settings (Disable Censorship) ---
+const SAFETY_SETTINGS = [
+    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 
 // --- Shared Schemas ---
 
@@ -44,7 +74,6 @@ const playerSchema = {
        statusEffects: { type: Type.ARRAY, items: { type: Type.STRING } },
        knownRumors: { type: Type.ARRAY, items: { type: Type.STRING } },
        inventory: { type: Type.ARRAY, items: itemSchema },
-       imageUrl: { type: Type.STRING }
     },
     required: ["name", "inventory", "hp", "appearance"]
 };
@@ -85,8 +114,7 @@ const locationSchema = {
         description: { type: Type.STRING },
         type: { type: Type.STRING, enum: ["City", "Wild", "Dungeon", "Interior"] },
         isVisited: { type: Type.BOOLEAN },
-        connectedLocationIds: { type: Type.ARRAY, items: locationConnectionSchema },
-        imageUrl: { type: Type.STRING }
+        connectedLocationIds: { type: Type.ARRAY, items: locationConnectionSchema }
     },
     required: ["id", "name", "connectedLocationIds"]
 };
@@ -107,11 +135,12 @@ export const generateImage = async (apiKey: string, prompt: string): Promise<str
         const ai = new GoogleGenAI({ apiKey });
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
-            contents: { parts: [{ text: prompt }] }
+            contents: { parts: [{ text: prompt }] },
+            config: {
+                safetySettings: SAFETY_SETTINGS 
+            }
         });
 
-        // The model returns candidates. The first candidate has content.
-        // We look for the inlineData part.
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) {
                 return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
@@ -134,6 +163,10 @@ export const generateStoryTurn = async (
   isDirectorMode: boolean = false
 ): Promise<StorySegment> => {
   const ai = new GoogleGenAI({ apiKey });
+
+  const safeState = sanitizeStateForAi(currentState);
+  const SAFE_HISTORY_LIMIT = 50;
+  const slicedHistory = history.slice(-SAFE_HISTORY_LIMIT);
 
   const responseSchema = {
     type: Type.OBJECT,
@@ -165,13 +198,13 @@ export const generateStoryTurn = async (
 
   const prompt = `
     CURRENT WORLD STATE:
-    ${JSON.stringify(currentState, null, 2)}
+    ${JSON.stringify(safeState, null, 2)}
 
-    PLAYER META-PREFERENCES (What they want from the story):
+    PLAYER META-PREFERENCES:
     "${currentState.metaPreferences}"
 
-    NARRATIVE HISTORY (Full Context):
-    ${history.join("\n---\n")}
+    NARRATIVE HISTORY (Last ${SAFE_HISTORY_LIMIT} Turns):
+    ${slicedHistory.join("\n---\n")}
 
     ${modeInstruction}
 
@@ -181,10 +214,32 @@ export const generateStoryTurn = async (
     1. Advance the story.
     2. Simulate NPC behavior (off-screen movement/thoughts).
     3. Update JSON state.
-    4. Provide 3 suggested actions for the player.
+    4. Provide 3 suggested actions for the user.
     5. Update 'storytellerThoughts' with your plan for the next scenes based on 'metaPreferences'.
   `;
 
+  // Helper to process response
+  const processResponse = (text: string) => {
+      const cleaned = cleanJson(text);
+      if (!cleaned) throw new Error("Empty response received");
+      
+      let data;
+      try {
+        data = JSON.parse(cleaned);
+      } catch (e) {
+        throw new Error(`JSON Parse Error. Raw text starts with: ${text.substring(0, 100)}...`);
+      }
+
+      if (!data.updates) data.updates = {};
+      
+      // Safety check for empty narrative
+      if (!data.narrative || data.narrative.trim() === "..." || data.narrative.trim().length === 0) {
+          throw new Error("AI returned empty narrative (Safety Block or Generation Error).");
+      }
+      return data;
+  };
+
+  // 1. Try with Gemini 3.0 Pro
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
@@ -193,24 +248,52 @@ export const generateStoryTurn = async (
         systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: responseSchema,
-        thinkingConfig: {
-          thinkingBudget: 2048,
-        } 
+        maxOutputTokens: 8192,
+        thinkingConfig: { thinkingBudget: 2048 },
+        safetySettings: SAFETY_SETTINGS
       }
     });
 
-    const jsonText = response.text || "{}";
-    const data = JSON.parse(cleanJson(jsonText));
-
     return {
-      narrative: data.narrative,
-      suggestedActions: data.suggestedActions || [],
-      stateUpdate: data.updates
+      narrative: processResponse(response.text || "{}").narrative,
+      suggestedActions: processResponse(response.text || "{}").suggestedActions || [],
+      stateUpdate: processResponse(response.text || "{}").updates
     };
 
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw new Error("The world logic fractured. Please try again.");
+  } catch (error: any) {
+    console.warn("Gemini 3.0 Pro failed. Attempting Fallback to 2.5 Flash...", error);
+    
+    // 2. Fallback to Gemini 2.5 Flash
+    try {
+        const fallbackResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+                responseMimeType: "application/json",
+                responseSchema: responseSchema,
+                maxOutputTokens: 8192,
+                safetySettings: SAFETY_SETTINGS // Disable censorship even on fallback
+            }
+        });
+
+        const data = processResponse(fallbackResponse.text || "{}");
+        return {
+            narrative: data.narrative,
+            suggestedActions: data.suggestedActions || [],
+            stateUpdate: data.updates
+        };
+
+    } catch (fallbackError: any) {
+        console.error("Critical Failure (Fallback also failed):", fallbackError);
+        let msg = "The world logic fractured (Both Primary and Backup models failed).";
+        
+        // Log raw outputs if available for debugging
+        const raw1 = error.response?.text || error.message;
+        const raw2 = fallbackError.response?.text || fallbackError.message;
+
+        throw new Error(`${msg}\n\n[Debug Info]\nErr1: ${raw1?.substring(0, 200)}\nErr2: ${raw2?.substring(0, 200)}`);
+    }
   }
 };
 
@@ -226,6 +309,11 @@ export const createWorldState = async (
     const gameStateSchema = {
         type: Type.OBJECT,
         properties: {
+            openingScene: { 
+                type: Type.ARRAY, 
+                items: { type: Type.STRING },
+                description: "Array of paragraphs for the long opening scene."
+            },
             turnCount: { type: Type.INTEGER },
             currentLocationId: { type: Type.STRING },
             currentTime: { type: Type.STRING },
@@ -238,7 +326,7 @@ export const createWorldState = async (
             worldLore: { type: Type.ARRAY, items: { type: Type.STRING } },
             activeEvents: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
-        required: ["player", "npcs", "locations", "currentLocationId", "currentTime"]
+        required: ["player", "npcs", "locations", "currentLocationId", "currentTime", "openingScene"]
     };
 
     const prompt = `
@@ -252,9 +340,9 @@ export const createWorldState = async (
       5. Add 'worldLore' and 'activeEvents'.
       6. Define a cohesive 'visualStyle' for image generation.
       7. Initialize 'storytellerThoughts' (your plan) and 'metaPreferences' (defaults).
+      8. WRITE THE OPENING SCENE as an array of strings (paragraphs).
     `;
 
-    // Strategy: Streaming response to prevent timeout perception
     try {
         onLog("Initializing Neural Link (Gemini 2.0)...");
         onLog("Connecting to World Engine Stream...");
@@ -266,8 +354,9 @@ export const createWorldState = async (
                 systemInstruction: WORLD_GEN_INSTRUCTION,
                 responseMimeType: "application/json",
                 responseSchema: gameStateSchema,
-                // Using thinking budget for depth, but streaming prevents "hanging" feel
-                thinkingConfig: { thinkingBudget: 2048 }
+                maxOutputTokens: 8192,
+                thinkingConfig: { thinkingBudget: 2048 },
+                safetySettings: SAFETY_SETTINGS
             }
         });
 
@@ -279,7 +368,6 @@ export const createWorldState = async (
             if (chunkText) {
                 fullText += chunkText;
                 chunkCount++;
-                // Update log every few chunks to show activity without spamming
                 if (chunkCount % 3 === 0) {
                      onLog(`Downloading World Data... (${fullText.length} bytes)`);
                 }
@@ -294,9 +382,10 @@ export const createWorldState = async (
         
         try {
             newState = JSON.parse(cleanedJson) as GameState;
-        } catch (parseError) {
+        } catch (parseError: any) {
              onLog("JSON Parse failed on first attempt. Trying repair...");
-             throw new Error("Data corruption detected during transfer.");
+             console.error("RAW FAILED JSON:", fullText); // Log raw for debugging
+             throw new Error(`Data corruption detected. Raw length: ${fullText.length}`);
         }
         
         validateState(newState);
@@ -306,18 +395,18 @@ export const createWorldState = async (
 
     } catch (firstError: any) {
         onLog(`Warning: Deep stream interrupted (${firstError.message}).`);
-        onLog("Engaging Emergency Protocols (Standard Generation)...");
+        onLog("Engaging Emergency Protocols (Standard Generation with Gemini 2.5)...");
         
-        // Fallback to non-streaming, low-latency call if streaming fails
         try {
              const fallbackResponse = await ai.models.generateContent({
-                model: 'gemini-2.5-flash', // Fast fallback
+                model: 'gemini-2.5-flash',
                 contents: prompt,
                 config: {
                     systemInstruction: WORLD_GEN_INSTRUCTION,
                     responseMimeType: "application/json",
                     responseSchema: gameStateSchema,
-                    // No thinking config for fallback
+                    maxOutputTokens: 8192,
+                    safetySettings: SAFETY_SETTINGS
                 }
             });
             
@@ -338,15 +427,42 @@ export const createWorldState = async (
 }
 
 function validateState(state: any) {
-    if (!state.player || !state.npcs || !state.locations) {
-        throw new Error("Generated world was incomplete (missing core tables).");
+    if (!state.player || !state.locations) {
+        console.warn("Partial state detected during validation.");
     }
-    // Fix missing defaults if AI forgot them
+    
     if (!state.turnCount) state.turnCount = 1;
+    if (!state.player) state.player = { name: "Survivor", hp: {current:10,max:10}, appearance: {}, inventory: []};
     if (!state.player.hp) state.player.hp = { current: 20, max: 20 };
     if (!state.player.appearance) state.player.appearance = { physical: "Неизвестно", clothing: "Неизвестно" };
+    
     if (!state.player.inventory) state.player.inventory = [];
+    if (!state.player.statusEffects) state.player.statusEffects = [];
+    if (!state.player.knownRumors) state.player.knownRumors = [];
+    
+    delete state.player.imageUrl;
+    
+    if (!state.worldLore) state.worldLore = [];
+    if (!state.activeEvents) state.activeEvents = [];
+    
+    if (!state.locations) state.locations = [];
+    state.locations.forEach((loc: any) => {
+        if (!loc.connectedLocationIds) loc.connectedLocationIds = [];
+        delete loc.imageUrl;
+    });
+    
+    if (!state.npcs) state.npcs = [];
+    state.npcs.forEach((npc: any) => {
+        if (!npc.knownFacts) npc.knownFacts = [];
+    });
+
     if (!state.visualStyle) state.visualStyle = "Fantasy, Detailed, Digital Art";
     if (!state.storytellerThoughts) state.storytellerThoughts = "Analyzing input...";
     if (!state.metaPreferences) state.metaPreferences = "Balanced adventure.";
+    
+    if (!state.openingScene) {
+        state.openingScene = [`**${state.currentTime}**`, `Вы находитесь в ${state.locations.find((l:any) => l.id === state.currentLocationId)?.name || 'Unknown'}.`];
+    } else if (typeof state.openingScene === 'string') {
+        state.openingScene = [state.openingScene];
+    }
 }
