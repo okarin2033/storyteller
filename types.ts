@@ -88,3 +88,12 @@ export interface ChatMessage {
   timestamp?: number;
   sceneImage?: string; // Generated visualization of this specific turn
 }
+
+export interface SaveFile {
+    version: number;
+    timestamp: number;
+    name: string;
+    gameState: GameState;
+    history: ChatMessage[];
+    stateHistory: GameState[];
+}

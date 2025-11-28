@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Settings, X, Save } from 'lucide-react';
+import { Settings, X, Save, Download } from 'lucide-react';
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -9,9 +9,10 @@ interface SettingsModalProps {
     onSaveStyle: (style: string) => void;
     apiKey: string;
     onSaveKey: (key: string) => void;
+    onExportSave?: () => void;
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, visualStyle, onSaveStyle, apiKey, onSaveKey }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, visualStyle, onSaveStyle, apiKey, onSaveKey, onExportSave }) => {
     const [tempStyle, setTempStyle] = useState(visualStyle);
     const [tempKey, setTempKey] = useState(apiKey);
 
@@ -57,12 +58,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, visualSt
                         />
                     </div>
 
-                    <button 
-                        onClick={handleSave}
-                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
-                    >
-                        <Save size={18} /> Apply Changes
-                    </button>
+                    <div className="flex flex-col gap-3 pt-4 border-t border-slate-800">
+                        {onExportSave && (
+                            <button 
+                                onClick={onExportSave}
+                                className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors border border-slate-700"
+                            >
+                                <Download size={18} /> Save Game to File
+                            </button>
+                        )}
+
+                        <button 
+                            onClick={handleSave}
+                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
+                        >
+                            <Save size={18} /> Apply Changes
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

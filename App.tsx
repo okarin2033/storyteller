@@ -8,9 +8,9 @@ import NPCList from './components/NPCList';
 import SettingsModal from './components/SettingsModal';
 import CharacterModal from './components/CharacterModal';
 import { generateStoryTurn, createWorldState, generateImage } from './services/geminiService';
-import { GameState, NPC, WorldLocation, SuggestedAction, ChatMessage } from './types';
+import { GameState, NPC, WorldLocation, SuggestedAction, ChatMessage, SaveFile } from './types';
 import { INITIAL_GAME_STATE } from './constants';
-import { Send, BookOpen, Sparkles, Play, Terminal, Map as MapIcon, Database, RotateCcw, Users, Settings as SettingsIcon, ToggleLeft, ToggleRight, Menu, Info, X } from 'lucide-react';
+import { Send, BookOpen, Sparkles, Play, Terminal, Map as MapIcon, Database, RotateCcw, Users, Settings as SettingsIcon, ToggleLeft, ToggleRight, Menu, Info, X, Upload } from 'lucide-react';
 
 type AppMode = 'MENU' | 'GAME';
 type RightPanelTab = 'MAP' | 'NPC' | 'GOD';
@@ -24,6 +24,7 @@ const App: React.FC = () => {
   const [isGeneratingWorld, setIsGeneratingWorld] = useState(false);
   const [generationLogs, setGenerationLogs] = useState<string[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Game State
   const [input, setInput] = useState('');
@@ -61,6 +62,64 @@ const App: React.FC = () => {
     }
   }, [generationLogs]);
 
+  // --- SAVE / LOAD SYSTEM ---
+
+  const handleExportSave = () => {
+      const saveFile: SaveFile = {
+          version: 1,
+          timestamp: Date.now(),
+          name: gameState.player.name,
+          gameState: gameState,
+          history: history,
+          stateHistory: stateHistory
+      };
+
+      const blob = new Blob([JSON.stringify(saveFile, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `save_${gameState.player.name.replace(/\s+/g, '_')}_${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+  };
+
+  const handleImportClick = () => {
+      fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+          try {
+              const content = event.target?.result as string;
+              const saveFile: SaveFile = JSON.parse(content);
+              
+              // Basic validation
+              if (!saveFile.gameState || !saveFile.history) {
+                  throw new Error("Invalid save file format.");
+              }
+
+              setGameState(saveFile.gameState);
+              setHistory(saveFile.history);
+              setStateHistory(saveFile.stateHistory || []);
+              setMode('GAME');
+              setError(null);
+          } catch (err) {
+              setError("Failed to load save file: " + (err as Error).message);
+          }
+      };
+      reader.readAsText(file);
+      // Reset input
+      e.target.value = '';
+  };
+
+  // --- WORLD CREATION ---
+
   const handleCreateWorld = async () => {
       if (!apiKey) { setError("API Key Required"); return; }
       
@@ -93,6 +152,8 @@ const App: React.FC = () => {
       setHistory([{ role: 'model', content: "Дождь барабанит по крыше таверны «Ржавый Якорь»..." }]);
       setMode('GAME');
   }
+
+  // --- GAMEPLAY ACTIONS ---
 
   const handleUpdateNPC = (id: string, updates: Partial<NPC>) => {
       setGameState(prev => ({
@@ -300,6 +361,7 @@ const App: React.FC = () => {
                <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl relative z-10">
                    <div className="flex justify-center mb-6"><BookOpen size={48} className="text-indigo-500" /></div>
                    <h1 className="text-4xl font-heading font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-purple-400 mb-2">Chronicles of the Deep World</h1>
+                   <p className="text-center text-slate-500 mb-8 font-serif italic">Version 1.0 — Infinite Context Engine</p>
                    
                    {error && (
                        <div className="mb-4 bg-red-900/50 border border-red-800 text-red-200 p-3 rounded text-sm text-center flex flex-col items-center gap-2">
@@ -334,9 +396,27 @@ const App: React.FC = () => {
                                value={worldIdea}
                                onChange={(e) => setWorldIdea(e.target.value)}
                            />
-                           <button onClick={handleCreateWorld} disabled={!worldIdea} className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg"><Sparkles /> Генерировать Мир</button>
-                           <div className="relative flex py-2 items-center"><div className="flex-grow border-t border-slate-800"></div><span className="flex-shrink mx-4 text-slate-600 text-xs uppercase">Или</span><div className="flex-grow border-t border-slate-800"></div></div>
-                           <button onClick={handleStartDefault} className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-medium flex items-center justify-center gap-2 transition-all"><Play size={16} /> Запустить Демо (Таверна)</button>
+                           
+                           <div className="grid grid-cols-2 gap-3">
+                               <button onClick={handleCreateWorld} disabled={!worldIdea} className="col-span-2 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg">
+                                   <Sparkles /> Генерировать Мир
+                               </button>
+                               
+                               <button onClick={handleStartDefault} className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-medium flex items-center justify-center gap-2 transition-all">
+                                   <Play size={16} /> Старт (Демо)
+                               </button>
+
+                               <button onClick={handleImportClick} className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-medium flex items-center justify-center gap-2 transition-all border border-slate-700">
+                                   <Upload size={16} /> Загрузить Мир
+                               </button>
+                               <input 
+                                   type="file" 
+                                   ref={fileInputRef} 
+                                   className="hidden" 
+                                   accept=".json" 
+                                   onChange={handleFileChange}
+                               />
+                           </div>
                        </div>
                    )}
                </div>
@@ -353,6 +433,7 @@ const App: React.FC = () => {
         onSaveStyle={handleSaveStyle}
         apiKey={apiKey}
         onSaveKey={setApiKey}
+        onExportSave={handleExportSave}
       />
 
       {showCharacterModal && (
