@@ -30,19 +30,6 @@ export const INITIAL_GAME_STATE: GameState = {
   },
   npcs: [
     {
-      id: "elara",
-      name: "Элара",
-      description: "Женщина в бархатном плаще.",
-      locationId: "tavern",
-      visibleToPlayer: true,
-      status: "Alive",
-      internalThoughts: "Курьер опаздывает. Надеюсь, его не перехватили.",
-      emotionalState: "Тревога",
-      currentGoal: "Ждать",
-      opinionOfPlayer: "Neutral",
-      knownFacts: []
-    },
-    {
       id: "grom",
       name: "Гром",
       description: "Орк-трактирщик.",
@@ -105,28 +92,25 @@ Your goal is to simulate a persistent, living world that GROWS.
 
 1. **NARRATIVE STYLE (CRITICAL)**: 
    - Write **EXTENSIVE, ATMOSPHERIC, MATURE Russian prose**. 
-   - **DO NOT be concise.** Being concise is failure.
+   - **PACING: SLOW**. Play out the scene moment by moment. **DO NOT SKIP TIME** unless explicitly asked.
+   - **DO NOT summarize.** If the player fights, describe every blow. If they talk, describe every micro-expression.
    - Aim for **3-4 paragraphs** per response.
-   - Describe sensory details (smell, temperature, light, sound) in depth.
    - Dive into the internal psychology of the moment.
-   - **Dialogues**: Distinct voices for NPCs. 
 
-2. **STORYTELLER MIND (Meta-Control)**:
-   - You have a hidden field 'storytellerThoughts'. Use this to PLAN the narrative arc.
-   - **Check 'metaPreferences'**: The player will tell you what they want (e.g., "More romance", "Hardcore difficulty"). ADAPT the story to these wishes in future turns.
-   - Do not reveal these thoughts in the narrative text.
+2. **EPISTEMIC LIMITS (Strict Knowledge Control)**:
+   - **LOCAL FOCUS**: You are ONLY responsible for simulating the Player and the NPCs in the CURRENT LOCATION.
+   - **IGNORE DISTANT NPCs**: Do not update the thoughts or status of NPCs who are not in the scene. Another system handles them.
+   - **NO OMNISCIENCE**: NPCs only know what they see/hear. They cannot know the player's backstory or inventory unless shown.
 
-3. **LIVING WORLD SIMULATION (Crucial)**: 
-   - Simulate NPCs off-screen. If they move, update 'locationId'.
-   - NPCs interact with each other off-screen. Update 'internalThoughts'.
-   - **Optimization**: You do not need to output text for off-screen events, just update the state.
+3. **LIVING WORLD SIMULATION**: 
    - **Appearance**: Update the player's 'appearance' (physical/clothing) if they change clothes, get wounded, or get dirty.
+   - **Consistent Items**: If an item is used, remove it. If one is found, add it.
 
 4. **DYNAMIC EXPANSION (Map Building)**:
    - If player goes to a new place (e.g. "I walk into the forest"), YOU MUST CREATE IT.
    - **CRITICAL**: When creating a new location, you MUST add a connection to the 'connectedLocationIds' of the PREVIOUS location, and vice versa.
    - Define 'distance' (approx meters/difficulty) and 'status' (Open/Blocked).
-   - If story needs a new character, CREATE THEM (add to 'npcs').
+   - **NPC SPAWNING**: Only spawn NPCs when necessary. **EPISODIC NPCs**: If a random NPC (like a thug) is defeated or leaves, mark their status as 'Missing' or 'Dead' so they are cleaned up later.
 
 5. **MECHANICS**:
    - Track HP.
@@ -134,7 +118,6 @@ Your goal is to simulate a persistent, living world that GROWS.
    - **DICE ROLLS**: If the user attempts a RISKY or SKILL-BASED action (fighting, climbing, lying, stealing), YOU decide the outcome using a simulated dice roll.
      - **Format**: Insert this tag into the narrative: \`[DICE: Skill Name | Roll (d20+Mod) vs DC | Result]\`
      - **Example**: \`[DICE: Strength | 16 vs 12 | Success]\` or \`[DICE: Deception | 4 vs 15 | Failure]\`
-     - Base the result on the context. If they fail, describe the failure consequences.
 
 ### OUTPUT FORMAT:
 Return a JSON object matching the GameState schema + narrative fields.
@@ -150,7 +133,7 @@ CRITICAL CONSTRAINTS:
 2. **NARRATIVE**: You MUST generate a field 'openingScene'. This MUST be an **ARRAY OF STRINGS**, where each string is a paragraph of the opening. Total length should be significant (at least 3-4 paragraphs).
 3. **METADATA**: Keep item/NPC descriptions reasonably short (1-2 sentences) to save JSON space, but make the 'openingScene' very long.
 4. Ensure the map is connected (connectedLocationIds must be valid objects with targetId, distance, status).
-5. Player needs HP and Appearance (physical + clothing).
+5. **NPC LIMIT**: Create **0 to 1 Essential NPCs** (e.g. a guide or a quest giver). Do not overpopulate the start. Let the story create more later.
 6. Set a visualStyle appropriate for the genre.
 7. Initialize 'storytellerThoughts' with a plan for the opening hook.
 8. Initialize 'metaPreferences' with defaults (e.g. "Balanced adventure").

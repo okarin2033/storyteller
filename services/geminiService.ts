@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
-import { GameState, StorySegment } from "../types";
+import { GameState, StorySegment, NPC } from "../types";
 import { SYSTEM_INSTRUCTION, WORLD_GEN_INSTRUCTION } from "../constants";
 
 const cleanJson = (text: string): string => {
@@ -153,6 +153,66 @@ export const generateImage = async (apiKey: string, prompt: string): Promise<str
     }
 }
 
+// --- Background Simulation (Split Brain) ---
+
+export const simulateBackgroundWorld = async (
+    apiKey: string,
+    state: GameState,
+    recentNarrative: string
+): Promise<{ npcs: NPC[] }> => {
+    const ai = new GoogleGenAI({ apiKey });
+    
+    // Filter only distant NPCs
+    const distantNPCs = (state.npcs || []).filter(n => n.locationId !== state.currentLocationId && n.status === 'Alive');
+    
+    if (distantNPCs.length === 0) return { npcs: [] };
+
+    const prompt = `
+    TASK: Background World Simulation.
+    
+    You are managing the "off-screen" world.
+    The Player is currently at: ${state.currentLocationId}.
+    The Player just experienced: "${recentNarrative.substring(0, 200)}..."
+    
+    UPDATE these DISTANT NPCs:
+    ${JSON.stringify(distantNPCs, null, 2)}
+    
+    RULES:
+    1. These NPCs DO NOT KNOW what the player just did (unless it was a massive explosion).
+    2. They should follow their 'currentGoal' or daily routine.
+    3. They might move to a connected location.
+    4. If an NPC is "Episodic" (random thug/shopkeeper) and no longer relevant, you can set status to 'Missing' to clean them up.
+    
+    RETURN: JSON object with 'npcs' array containing ONLY the updated distant NPCs.
+    `;
+
+    const simSchema = {
+        type: Type.OBJECT,
+        properties: {
+            npcs: { type: Type.ARRAY, items: npcSchema }
+        }
+    };
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: simSchema,
+                safetySettings: SAFETY_SETTINGS
+            }
+        });
+        
+        const text = response.text || "{}";
+        const data = JSON.parse(cleanJson(text));
+        return { npcs: data.npcs || [] };
+    } catch (e) {
+        console.warn("Background sim failed", e);
+        return { npcs: [] };
+    }
+}
+
 // --- Story Generation ---
 
 export const generateStoryTurn = async (
@@ -168,6 +228,13 @@ export const generateStoryTurn = async (
   const SAFE_HISTORY_LIMIT = 50;
   const slicedHistory = history.slice(-SAFE_HISTORY_LIMIT);
 
+  // Filter out distant NPCs from the main prompt to prevent "Omniscience"
+  const localNPCs = (safeState.npcs || []).filter(n => n.locationId === safeState.currentLocationId);
+  const narrativeState = {
+      ...safeState,
+      npcs: localNPCs // Only show local NPCs to the narrative engine
+  };
+
   const responseSchema = {
     type: Type.OBJECT,
     properties: {
@@ -180,7 +247,7 @@ export const generateStoryTurn = async (
           currentTime: { type: Type.STRING },
           visualStyle: { type: Type.STRING },
           storytellerThoughts: { type: Type.STRING },
-          metaPreferences: { type: Type.STRING },
+          // metaPreferences REMOVED - AI cannot write to it
           player: playerSchema,
           npcs: { type: Type.ARRAY, items: npcSchema },
           locations: { type: Type.ARRAY, items: locationSchema },
@@ -197,10 +264,10 @@ export const generateStoryTurn = async (
     : "MODE: PLAYER MODE. Standard RPG logic applies.";
 
   const prompt = `
-    CURRENT WORLD STATE:
-    ${JSON.stringify(safeState, null, 2)}
+    CURRENT LOCAL STATE (Player + Local Context):
+    ${JSON.stringify(narrativeState, null, 2)}
 
-    PLAYER META-PREFERENCES:
+    PLAYER META-PREFERENCES (READ ONLY - DO NOT CHANGE):
     "${currentState.metaPreferences}"
 
     NARRATIVE HISTORY (Last ${SAFE_HISTORY_LIMIT} Turns):
@@ -211,11 +278,11 @@ export const generateStoryTurn = async (
     INPUT: "${playerAction}"
     
     INSTRUCTIONS:
-    1. Advance the story.
-    2. Simulate NPC behavior (off-screen movement/thoughts).
+    1. Advance the story scene-by-scene. Slow pacing.
+    2. Simulate LOCAL NPC behavior only.
     3. Update JSON state.
-    4. Provide 3 suggested actions for the user.
-    5. Update 'storytellerThoughts' with your plan for the next scenes based on 'metaPreferences'.
+    4. Provide 3 suggested actions.
+    5. Update 'storytellerThoughts' with your plan.
   `;
 
   // Helper to process response

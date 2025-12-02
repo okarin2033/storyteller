@@ -1,75 +1,143 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { WorldLocation, NPC, LocationConnection } from '../types';
-import { MapPin, Move, ZoomIn, ZoomOut, Maximize, Minimize, Eye, EyeOff, Lock, Footprints } from 'lucide-react';
+import { WorldLocation, NPC } from '../types';
+import { ZoomIn, ZoomOut, Move, Maximize, Minimize, Eye, EyeOff, Lock, Footprints } from 'lucide-react';
 
 interface WorldMapProps {
   locations: WorldLocation[];
   currentLocationId: string;
   npcs: NPC[];
   onTravel: (locationName: string) => void;
-  onMaximize?: () => void; // Trigger external modal
-  isFullScreen?: boolean;   // Are we inside the modal?
+  onMaximize?: () => void;
+  isFullScreen?: boolean;
 }
 
 interface Point { x: number; y: number }
 
 const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs, onTravel, onMaximize, isFullScreen = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Persistent storage for node positions so they don't jump around
   const [nodes, setNodes] = useState<Record<string, Point>>({});
-  const [scale, setScale] = useState(isFullScreen ? 1.2 : 0.8);
+  const [initialized, setInitialized] = useState(false);
+  
+  const [scale, setScale] = useState(isFullScreen ? 1.0 : 0.7);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   
   const [showNPCs, setShowNPCs] = useState(false);
   const [selectedNPC, setSelectedNPC] = useState<string | null>(null);
 
-  // Dragging states
   const [isDraggingMap, setIsDraggingMap] = useState(false);
   const [isDraggingNode, setIsDraggingNode] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<Point>({ x: 0, y: 0 });
 
-  // Initialize Nodes on first load or new locations
+  // --- STABLE LAYOUT ALGORITHM ---
   useEffect(() => {
-    setNodes(prev => {
-      const newNodes = { ...prev };
-      let hasChanges = false;
-      
-      (locations || []).forEach((loc, index) => {
-        if (!newNodes[loc.id]) {
+    if (!locations || locations.length === 0) return;
+
+    setNodes(prevNodes => {
+        const newNodes = { ...prevNodes };
+        let hasChanges = false;
+        const placedIds = new Set(Object.keys(prevNodes));
+
+        // 1. If it's the VERY first load, place the current location at 0,0
+        if (locations.length > 0 && Object.keys(newNodes).length === 0) {
+            const startLoc = locations.find(l => l.id === currentLocationId) || locations[0];
+            newNodes[startLoc.id] = { x: 0, y: 0 };
+            placedIds.add(startLoc.id);
             hasChanges = true;
-            // Place connected nodes near parents if possible
-            const connectedParentLink = (loc.connectedLocationIds || []).find(link => newNodes[link.targetId]);
-            if (connectedParentLink) {
-                const parent = newNodes[connectedParentLink.targetId];
-                // Random angle
-                const angle = Math.random() * Math.PI * 2;
-                
-                // VISUAL DISTANCE LOGIC:
-                // Cap the visual distance. Even if it's 1000m away, we don't want it 1000px away.
-                // Min 100px, Max 250px. This keeps things compact.
-                const rawDist = connectedParentLink.distance || 50;
-                const visualDist = Math.min(250, Math.max(100, rawDist * 0.4));
-
-                newNodes[loc.id] = {
-                    x: parent.x + Math.cos(angle) * visualDist,
-                    y: parent.y + Math.sin(angle) * visualDist
-                };
-            } else {
-                // Spiral layout for initial or disconnected
-                const angle = index * 0.8;
-                const r = 100 + (index * 60);
-                newNodes[loc.id] = {
-                    x: Math.cos(angle) * r,
-                    y: Math.sin(angle) * r
-                };
-            }
         }
-      });
-      return hasChanges ? newNodes : prev;
-    });
-  }, [locations]);
 
-  // Handle Map Pan
+        // 2. Iterate multiple times to resolve dependencies (A connects to B, but B isn't placed yet)
+        // We do a simplified Breadth-First placement
+        let somethingChanged = true;
+        while (somethingChanged) {
+            somethingChanged = false;
+            
+            locations.forEach(loc => {
+                if (placedIds.has(loc.id)) return; // Already placed
+
+                // Find a neighbor that is already placed
+                const connections = loc.connectedLocationIds || [];
+                const parentLink = connections.find(link => placedIds.has(link.targetId));
+
+                if (parentLink) {
+                    const parentPos = newNodes[parentLink.targetId];
+                    
+                    // Determine angle: avoid overlapping existing nodes if possible
+                    // Simple heuristic: Use the index or ID hash to determine a consistent angle
+                    const angleOffset = (loc.id.length + loc.name.length) % 8; // Pseudo-random consistent number
+                    const baseAngle = (angleOffset / 8) * Math.PI * 2;
+                    
+                    // Visual distance clamping
+                    const distRaw = parentLink.distance || 50;
+                    const visualDist = Math.min(200, Math.max(120, distRaw * 0.5)); // Clamp visual length
+
+                    newNodes[loc.id] = {
+                        x: parentPos.x + Math.cos(baseAngle) * visualDist,
+                        y: parentPos.y + Math.sin(baseAngle) * visualDist
+                    };
+
+                    // Collision avoidance (Super basic)
+                    // If too close to another node, nudge it
+                    Object.keys(newNodes).forEach(otherId => {
+                        if (otherId === loc.id) return;
+                        const other = newNodes[otherId];
+                        const dx = newNodes[loc.id].x - other.x;
+                        const dy = newNodes[loc.id].y - other.y;
+                        const d = Math.sqrt(dx*dx + dy*dy);
+                        if (d < 80) {
+                             newNodes[loc.id].x += 40;
+                             newNodes[loc.id].y += 40;
+                        }
+                    });
+
+                    placedIds.add(loc.id);
+                    hasChanges = true;
+                    somethingChanged = true;
+                }
+            });
+        }
+        
+        // 3. Catch orphans (nodes with no placed neighbors yet, rare but possible in disjoint graphs)
+        locations.forEach(loc => {
+            if (!placedIds.has(loc.id)) {
+                // Just place them far away in a spiral
+                const idx = locations.indexOf(loc);
+                const angle = idx * 0.5;
+                const r = 300 + (idx * 50);
+                newNodes[loc.id] = { x: Math.cos(angle) * r, y: Math.sin(angle) * r };
+                placedIds.add(loc.id);
+                hasChanges = true;
+            }
+        });
+
+        return hasChanges ? newNodes : prevNodes;
+    });
+
+    setInitialized(true);
+  }, [locations]); // We depend on locations, but we only ADD to state, never reset it completely.
+
+  // Center on player ONLY on initial load or full screen toggle
+  useEffect(() => {
+      if (initialized && locations.length > 0 && nodes[currentLocationId]) {
+          // Only auto-center if we haven't dragged significantly? 
+          // For now, let's just center on mount/resize
+          if (offset.x === 0 && offset.y === 0) centerOnPlayer();
+      }
+  }, [initialized, isFullScreen]);
+
+  const centerOnPlayer = () => {
+      const currentPos = nodes[currentLocationId];
+      if (currentPos && containerRef.current) {
+         const { width, height } = containerRef.current.getBoundingClientRect();
+         setOffset({
+             x: (width / 2) - (currentPos.x * scale),
+             y: (height / 2) - (currentPos.y * scale)
+         });
+      }
+  };
+
   const handleMouseDown = (e: React.MouseEvent) => {
       if (isDraggingNode) return;
       setIsDraggingMap(true);
@@ -103,33 +171,11 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
       });
   };
 
-  const centerOnPlayer = () => {
-      const currentPos = nodes[currentLocationId];
-      if (currentPos && containerRef.current) {
-         const { width, height } = containerRef.current.getBoundingClientRect();
-         setOffset({
-             x: (width / 2) - (currentPos.x * scale),
-             y: (height / 2) - (currentPos.y * scale)
-         });
-      }
-  };
-
-  // Center once when nodes are ready
-  useEffect(() => {
-     if (!isDraggingMap && !isDraggingNode && (locations || []).length > 0 && Object.keys(nodes).length > 0) {
-         // Only center if we haven't moved yet (offset is 0,0) or if it's the very first render
-         if (offset.x === 0 && offset.y === 0) {
-            centerOnPlayer();
-         }
-     }
-  }, [currentLocationId, Object.keys(nodes).length, isFullScreen]); 
-
   return (
     <div 
         className={`bg-slate-900 relative overflow-hidden select-none w-full h-full ${isFullScreen ? 'cursor-grab active:cursor-grabbing' : ''}`} 
         ref={containerRef}
     >
-        
         {/* Controls */}
         <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
             <button 
@@ -143,7 +189,6 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
             <button onClick={() => setScale(s => Math.min(s + 0.1, 3))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomIn size={16} /></button>
             <button onClick={() => setScale(s => Math.max(s - 0.1, 0.2))} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700"><ZoomOut size={16} /></button>
             <button onClick={centerOnPlayer} className="p-2 bg-slate-800 text-slate-200 rounded shadow hover:bg-slate-700" title="Center on Player"><Move size={16} /></button>
-            
             {onMaximize && (
                 <button onClick={onMaximize} className="p-2 bg-slate-800 text-indigo-400 rounded shadow hover:bg-slate-700 mt-2">
                     {isFullScreen ? <Minimize size={16} /> : <Maximize size={16} />}
@@ -152,7 +197,7 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
         </div>
 
         <div className="absolute top-4 left-4 z-20 bg-black/50 px-3 py-1 rounded text-[10px] text-slate-400 pointer-events-none border border-slate-700 backdrop-blur-sm">
-            {isFullScreen ? "Fullscreen Map" : "Drag to pan"}
+            {isFullScreen ? "Fullscreen Map" : "Drag to pan / Drag nodes"}
         </div>
 
         <div 
@@ -188,22 +233,16 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                                         stroke={link.status === 'Blocked' ? '#ef4444' : '#64748b'} 
                                         strokeWidth={link.status === 'Blocked' ? 3 / scale : 2 / scale} 
                                         strokeDasharray={link.status === 'Blocked' ? "0" : "5 5"}
-                                        opacity={0.6}
+                                        opacity={0.5}
                                     />
                                     {/* Distance Label */}
-                                    <rect 
-                                        x={5000 + (start.x + end.x) / 2 - 14} 
-                                        y={5000 + (start.y + end.y) / 2 - 10}
-                                        width="28" height="20" fill="#0f172a" rx="4"
-                                        stroke="#1e293b" strokeWidth="1"
-                                    />
                                     <text
                                         x={5000 + (start.x + end.x) / 2}
-                                        y={5000 + (start.y + end.y) / 2 + 4}
-                                        fill="#94a3b8"
+                                        y={5000 + (start.y + end.y) / 2 - 5}
+                                        fill="#64748b"
                                         fontSize="10"
                                         textAnchor="middle"
-                                        className="font-mono font-bold"
+                                        className="font-mono"
                                     >
                                         {link.distance}
                                     </text>
@@ -223,37 +262,37 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                     return (
                         <div 
                             key={loc.id}
-                            className={`absolute transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center group cursor-pointer transition-colors duration-200`}
+                            className={`absolute transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center group cursor-pointer transition-all duration-300`}
                             style={{ left: pos.x, top: pos.y }}
                             onMouseDown={(e) => handleNodeMouseDown(e, loc.id)}
                         >
                             <div className={`
-                                w-12 h-12 rounded-full border-2 flex items-center justify-center shadow-xl z-10 
+                                w-10 h-10 md:w-14 md:h-14 rounded-full border-2 flex items-center justify-center shadow-xl z-10 
                                 ${isCurrent 
-                                    ? 'bg-indigo-600 border-white shadow-indigo-500/50' 
+                                    ? 'bg-indigo-600 border-white shadow-indigo-500/50 scale-110' 
                                     : 'bg-slate-800 border-slate-600 hover:border-slate-400'
                                 }
                             `}>
-                                <div className="text-xl">
+                                <div className="text-lg md:text-2xl">
                                     {loc.type === 'Wild' ? '🌲' : loc.type === 'City' ? '🏰' : loc.type === 'Dungeon' ? '💀' : '🏠'}
                                 </div>
                             </div>
 
-                            <div className={`mt-2 px-2 py-0.5 rounded text-[10px] whitespace-nowrap border z-20 pointer-events-none select-none
-                                ${isCurrent ? 'bg-indigo-900/80 text-white border-indigo-500' : 'bg-black/60 text-slate-300 border-slate-700'}
+                            <div className={`mt-2 px-2 py-0.5 rounded text-[9px] md:text-[10px] whitespace-nowrap border z-20 pointer-events-none select-none
+                                ${isCurrent ? 'bg-indigo-900/90 text-white border-indigo-500' : 'bg-black/60 text-slate-300 border-slate-700'}
                             `}>
                                 {loc.name}
                             </div>
 
                              {/* NPC Indicators */}
                              {showNPCs && npcsHere.length > 0 && (
-                                <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 flex -space-x-2">
+                                <div className="absolute -top-4 md:-top-6 left-1/2 transform -translate-x-1/2 flex -space-x-1">
                                     {npcsHere.map((npc, idx) => (
                                         <div 
                                             key={npc.id} 
                                             onClick={(e) => { e.stopPropagation(); setSelectedNPC(npc.id); }}
                                             className={`
-                                                w-6 h-6 rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] font-bold text-white shadow-lg z-30
+                                                w-4 h-4 md:w-5 md:h-5 rounded-full border border-slate-900 flex items-center justify-center text-[8px] font-bold text-white shadow-lg z-30
                                                 cursor-pointer hover:scale-125 transition-transform
                                                 ${npc.status === 'Alive' ? 'bg-green-600' : 'bg-red-600'}
                                             `} 
@@ -266,50 +305,26 @@ const WorldMap: React.FC<WorldMapProps> = ({ locations, currentLocationId, npcs,
                                 </div>
                              )}
 
-                             {/* Selected NPC Info Card */}
-                             {selectedNPC && npcsHere.find(n => n.id === selectedNPC) && (
-                                 <div 
-                                    className="absolute bottom-14 bg-black/90 border border-slate-600 p-2 rounded w-40 z-50 pointer-events-none animate-in fade-in zoom-in-95"
-                                    onClick={(e) => e.stopPropagation()}
-                                 >
-                                     <div className="font-bold text-xs text-white mb-1">{npcsHere.find(n => n.id === selectedNPC)?.name}</div>
-                                     <div className="text-[10px] text-slate-400 italic">"{npcsHere.find(n => n.id === selectedNPC)?.internalThoughts}"</div>
-                                 </div>
-                             )}
-
                              {/* Travel Button Logic */}
                              {!isCurrent && (
-                                 <div className="absolute -bottom-8">
-                                     {(locations || []).find(l => l.id === currentLocationId)?.connectedLocationIds?.find(link => link.targetId === loc.id) ? (
-                                         (() => {
-                                             const connection = (locations || []).find(l => l.id === currentLocationId)?.connectedLocationIds?.find(link => link.targetId === loc.id);
-                                             if (connection?.status === 'Blocked') {
-                                                  return (
-                                                      <span className="bg-red-900/80 text-white text-[9px] px-2 py-1 rounded flex items-center gap-1">
-                                                          <Lock size={8} /> Blocked
-                                                      </span>
-                                                  )
-                                             }
-                                             return (
-                                                <button 
-                                                    className="bg-indigo-600 text-white text-[9px] px-2 py-1 rounded shadow-lg hover:bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        onTravel(loc.name);
-                                                    }}
-                                                    onMouseDown={(e) => e.stopPropagation()} 
-                                                >
-                                                    <Footprints size={8} /> Go ({connection?.distance})
-                                                </button>
-                                             )
-                                         })()
-                                     ) : null}
+                                 <div className="absolute -bottom-8 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto">
+                                     {(locations || []).find(l => l.id === currentLocationId)?.connectedLocationIds?.find(link => link.targetId === loc.id) && (
+                                        <button 
+                                            className="bg-indigo-600 text-white text-[9px] px-2 py-1 rounded shadow-lg hover:bg-indigo-500 flex items-center gap-1"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onTravel(loc.name);
+                                            }}
+                                            onMouseDown={(e) => e.stopPropagation()} 
+                                        >
+                                            <Footprints size={8} /> Go
+                                        </button>
+                                     )}
                                  </div>
                              )}
                         </div>
                     );
                 })}
-
             </div>
         </div>
     </div>

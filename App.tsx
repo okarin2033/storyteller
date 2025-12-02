@@ -8,7 +8,7 @@ import NPCList from './components/NPCList';
 import SettingsModal from './components/SettingsModal';
 import CharacterModal from './components/CharacterModal';
 import MapModal from './components/MapModal';
-import { generateStoryTurn, createWorldState, generateImage, sanitizeStateForAi } from './services/geminiService';
+import { generateStoryTurn, createWorldState, generateImage, sanitizeStateForAi, simulateBackgroundWorld } from './services/geminiService';
 import { GameState, NPC, WorldLocation, SuggestedAction, ChatMessage, SaveFile } from './types';
 import { INITIAL_GAME_STATE } from './constants';
 import { Send, BookOpen, Sparkles, Play, Terminal, Map as MapIcon, Database, RotateCcw, Users, Settings as SettingsIcon, ToggleLeft, ToggleRight, Menu, Info, X, Upload } from 'lucide-react';
@@ -192,6 +192,13 @@ const App: React.FC = () => {
           npcs: (prev.npcs || []).map(n => n.id === id ? { ...n, ...updates } : n)
       }));
   };
+
+  const handleDeleteNPC = (id: string) => {
+      setGameState(prev => ({
+          ...prev,
+          npcs: (prev.npcs || []).filter(n => n.id !== id)
+      }));
+  };
   
   const handleUpdatePreferences = (newPrefs: string) => {
       setGameState(prev => ({
@@ -254,11 +261,6 @@ const App: React.FC = () => {
     setError(null);
     setIsProcessing(true);
     
-    // Defensive check before calculating highlight data
-    const safeNPCs = currentState.npcs || [];
-    const safeInventory = currentState.player?.inventory || [];
-    const safeEffects = currentState.player?.statusEffects || [];
-
     if (!stateOverride) {
         setStateHistory(prev => [...prev, gameState]);
     }
@@ -267,12 +269,15 @@ const App: React.FC = () => {
     setHistory(newHistory as ChatMessage[]);
 
     try {
-      // NOTE: History sanitization (slicing) happens inside generateStoryTurn now
+      // 1. MAIN ENGINE: Generate Story & Local Updates
       const narrativeContext = newHistory.map(h => 
         `${h.role === 'user' ? (isDirectorMode ? 'DIRECTOR' : 'PLAYER') : 'GM'}: ${h.content}`
       );
 
       const result = await generateStoryTurn(apiKey, currentState, narrativeContext, actionText, isDirectorMode);
+
+      // 2. IMMEDIATE UI UPDATE (Narrative + Local Changes)
+      let tempGameState: GameState = currentState;
 
       setGameState(prevState => {
         const updates = result.stateUpdate || {};
@@ -303,7 +308,6 @@ const App: React.FC = () => {
             });
         }
         
-        // Safe arrays merging
         const prevLore = prevState.worldLore || [];
         const newLore = updates.worldLore || [];
         const mergedLore = [...prevLore, ...newLore.filter(l => !prevLore.includes(l))];
@@ -311,7 +315,7 @@ const App: React.FC = () => {
         const prevEvents = prevState.activeEvents || [];
         const newEvents = updates.activeEvents || prevEvents;
 
-        return {
+        const newState = {
             ...prevState,
             ...updates,
             turnCount: prevState.turnCount + 1,
@@ -328,8 +332,11 @@ const App: React.FC = () => {
             worldLore: mergedLore,
             activeEvents: newEvents,
             storytellerThoughts: updates.storytellerThoughts || prevState.storytellerThoughts,
-            metaPreferences: updates.metaPreferences || prevState.metaPreferences
+            metaPreferences: prevState.metaPreferences // LOCKED: AI cannot change this
         };
+
+        tempGameState = newState; // Capture for next step
+        return newState;
       });
 
       setHistory(prev => [...prev, { 
@@ -337,6 +344,24 @@ const App: React.FC = () => {
           content: result.narrative
       }]);
       setSuggestedActions(result.suggestedActions || []);
+
+      // 3. BACKGROUND SIMULATION (Split Brain - Async)
+      // Fire and forget - doesn't block the UI, but updates state eventually.
+      simulateBackgroundWorld(apiKey, tempGameState, result.narrative).then((bgResult) => {
+          if (bgResult.npcs && bgResult.npcs.length > 0) {
+              setGameState(current => {
+                  let finalNPCs = [...current.npcs];
+                  bgResult.npcs.forEach(bgNPC => {
+                      const idx = finalNPCs.findIndex(n => n.id === bgNPC.id);
+                      if (idx !== -1) {
+                          // Only update internal state/pos, don't overwrite local interactions
+                          finalNPCs[idx] = { ...finalNPCs[idx], ...bgNPC };
+                      }
+                  });
+                  return { ...current, npcs: finalNPCs };
+              });
+          }
+      });
 
     } catch (err: any) {
       setError(err.message || "Something went wrong.");
@@ -533,7 +558,7 @@ const App: React.FC = () => {
               </div>
               <div className="flex-1 relative overflow-hidden">
                   {rightTab === 'MAP' && <WorldMap locations={gameState.locations || []} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs || []} onTravel={handleTravel} onMaximize={() => setShowMapModal(true)} />}
-                  {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} />}
+                  {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} onDeleteNPC={handleDeleteNPC} />}
                   {rightTab === 'GOD' && <StateInspector gameState={gameState} onUpdatePreferences={handleUpdatePreferences} />}
               </div>
           </div>
@@ -640,7 +665,7 @@ const App: React.FC = () => {
           
           <div className="flex-1 relative overflow-hidden">
               {rightTab === 'MAP' && <WorldMap locations={gameState.locations || []} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs || []} onTravel={handleTravel} onMaximize={() => setShowMapModal(true)} />}
-              {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} />}
+              {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} onDeleteNPC={handleDeleteNPC} />}
               {rightTab === 'GOD' && <StateInspector gameState={gameState} onUpdatePreferences={handleUpdatePreferences} />}
           </div>
       </div>

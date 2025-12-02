@@ -1,14 +1,16 @@
+
 import React, { useState } from 'react';
 import { NPC, WorldLocation } from '../types';
-import { Search, MapPin, Brain, Heart, Target, Save, Edit2 } from 'lucide-react';
+import { Search, MapPin, Brain, Heart, Target, Save, Edit2, Trash2 } from 'lucide-react';
 
 interface NPCListProps {
     npcs: NPC[];
     locations: WorldLocation[];
     onUpdateNPC: (id: string, updates: Partial<NPC>) => void;
+    onDeleteNPC?: (id: string) => void;
 }
 
-const NPCList: React.FC<NPCListProps> = ({ npcs, locations, onUpdateNPC }) => {
+const NPCList: React.FC<NPCListProps> = ({ npcs, locations, onUpdateNPC, onDeleteNPC }) => {
     const [searchTerm, setSearchTerm] = useState("");
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDesc, setEditDesc] = useState("");
@@ -43,15 +45,26 @@ const NPCList: React.FC<NPCListProps> = ({ npcs, locations, onUpdateNPC }) => {
 
             <div className="flex-1 overflow-y-auto p-2 space-y-3 custom-scrollbar">
                 {filtered.map(npc => (
-                    <div key={npc.id} className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                    <div key={npc.id} className="bg-slate-800/40 border border-slate-700 rounded-lg p-3 group">
                         <div className="flex justify-between items-start mb-2">
                             <div className="flex items-center gap-2">
                                 <h3 className="font-bold text-slate-200">{npc.name}</h3>
                                 <span className={`w-2 h-2 rounded-full ${npc.status === 'Alive' ? 'bg-green-500' : 'bg-red-600'}`} title={npc.status} />
                             </div>
-                            <span className="text-[10px] text-slate-500 flex items-center gap-1 bg-slate-900 px-1.5 py-0.5 rounded">
-                                <MapPin size={10} /> {getLocationName(npc.locationId)}
-                            </span>
+                            <div className="flex gap-2">
+                                <span className="text-[10px] text-slate-500 flex items-center gap-1 bg-slate-900 px-1.5 py-0.5 rounded">
+                                    <MapPin size={10} /> {getLocationName(npc.locationId)}
+                                </span>
+                                {onDeleteNPC && (
+                                    <button 
+                                        onClick={() => onDeleteNPC(npc.id)} 
+                                        className="text-slate-600 hover:text-red-400 transition-colors"
+                                        title="Delete NPC"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         {/* Editable Description */}
@@ -67,9 +80,9 @@ const NPCList: React.FC<NPCListProps> = ({ npcs, locations, onUpdateNPC }) => {
                                     <button onClick={() => saveEdit(npc.id)} className="text-green-400 hover:text-green-300"><Save size={16} /></button>
                                 </div>
                             ) : (
-                                <div className="flex justify-between items-start group">
+                                <div className="flex justify-between items-start group/desc">
                                     <p className="text-xs text-slate-400 italic">{npc.description}</p>
-                                    <button onClick={() => startEdit(npc)} className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-slate-300 transition-opacity"><Edit2 size={12} /></button>
+                                    <button onClick={() => startEdit(npc)} className="opacity-0 group-hover/desc:opacity-100 text-slate-500 hover:text-slate-300 transition-opacity"><Edit2 size={12} /></button>
                                 </div>
                             )}
                         </div>
