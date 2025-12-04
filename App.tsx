@@ -1,5 +1,4 @@
-
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import NarrativeView from './components/NarrativeView';
 import StateInspector from './components/StateInspector';
 import LeftPanel from './components/LeftPanel';
@@ -8,10 +7,11 @@ import NPCList from './components/NPCList';
 import SettingsModal from './components/SettingsModal';
 import CharacterModal from './components/CharacterModal';
 import MapModal from './components/MapModal';
-import { generateStoryTurn, createWorldState, generateImage, sanitizeStateForAi, simulateBackgroundWorld } from './services/geminiService';
-import { GameState, NPC, WorldLocation, SuggestedAction, ChatMessage, SaveFile } from './types';
+import { useGameEngine } from './hooks/useGameEngine';
+import { createWorldState, generateImage, sanitizeStateForAi, repairGameState } from './services/geminiService';
+import { SaveFile } from './types';
 import { INITIAL_GAME_STATE } from './constants';
-import { Send, BookOpen, Sparkles, Play, Terminal, Map as MapIcon, Database, RotateCcw, Users, Settings as SettingsIcon, ToggleLeft, ToggleRight, Menu, Info, X, Upload } from 'lucide-react';
+import { Send, BookOpen, Sparkles, Play, Settings as SettingsIcon, Upload, X } from 'lucide-react';
 
 type AppMode = 'MENU' | 'GAME';
 type RightPanelTab = 'MAP' | 'NPC' | 'GOD';
@@ -20,653 +20,228 @@ const App: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>('');
   const [mode, setMode] = useState<AppMode>('MENU');
   
-  // Menu State
+  // Menu & World Gen
   const [worldIdea, setWorldIdea] = useState("Dark fantasy world where the sun has died, and humanity lives in underground cities.");
   const [isGeneratingWorld, setIsGeneratingWorld] = useState(false);
   const [generationLogs, setGenerationLogs] = useState<string[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Game State
-  const [input, setInput] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [rightTab, setRightTab] = useState<RightPanelTab>('MAP');
+  // Hook Logic
+  const engine = useGameEngine(apiKey);
   
-  const [gameState, setGameState] = useState<GameState>(INITIAL_GAME_STATE);
-  const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [suggestedActions, setSuggestedActions] = useState<SuggestedAction[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [stateHistory, setStateHistory] = useState<GameState[]>([]);
-
   // UI State
-  const [isDirectorMode, setIsDirectorMode] = useState(false);
+  const [input, setInput] = useState('');
+  const [rightTab, setRightTab] = useState<RightPanelTab>('MAP');
   const [showSettings, setShowSettings] = useState(false);
   const [showCharacterModal, setShowCharacterModal] = useState(false);
   const [showMapModal, setShowMapModal] = useState(false);
-  
-  // Mobile Drawers
-  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
-  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
 
+  // Init API Key
   useEffect(() => {
-    try {
-        if (process.env.API_KEY) {
-            setApiKey(process.env.API_KEY);
-        }
-    } catch (e) {
-        console.warn("API_KEY not found in environment.");
-    }
+    try { if (process.env.API_KEY) setApiKey(process.env.API_KEY); } catch (e) {}
   }, []);
 
   useEffect(() => {
-    if (logsEndRef.current) {
-        logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (logsEndRef.current) logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [generationLogs]);
 
-  // --- SAVE / LOAD SYSTEM ---
-
-  const handleExportSave = () => {
-      // Clean up the state before saving (remove large images)
-      const cleanGameState = sanitizeStateForAi(gameState);
-      const cleanStateHistory = stateHistory.map(sanitizeStateForAi);
-
-      const saveFile: SaveFile = {
-          version: 1,
-          timestamp: Date.now(),
-          name: gameState.player.name,
-          gameState: cleanGameState,
-          history: history, // History text remains, but we might want to strip sceneImages too if strictly no images.
-          stateHistory: cleanStateHistory
-      };
-
-      // Optional: Strip scene images from history if we want a TRULY text-only save file
-      saveFile.history = saveFile.history.map(msg => {
-          if (msg.sceneImage) {
-              const { sceneImage, ...rest } = msg;
-              return rest;
-          }
-          return msg;
-      });
-
-      const blob = new Blob([JSON.stringify(saveFile, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `save_${gameState.player.name.replace(/\s+/g, '_')}_${Date.now()}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-  };
-
-  const handleImportClick = () => {
-      fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-          try {
-              const content = event.target?.result as string;
-              const saveFile: SaveFile = JSON.parse(content);
-              
-              // Basic validation
-              if (!saveFile.gameState || !saveFile.history) {
-                  throw new Error("Invalid save file format.");
-              }
-
-              // Ensure arrays exist in imported state
-              const safeState = saveFile.gameState;
-              if (!safeState.locations) safeState.locations = [];
-              if (!safeState.npcs) safeState.npcs = [];
-              if (!safeState.player.inventory) safeState.player.inventory = [];
-              if (!safeState.activeEvents) safeState.activeEvents = [];
-
-              setGameState(safeState);
-              setHistory(saveFile.history);
-              setStateHistory(saveFile.stateHistory || []);
-              setMode('GAME');
-              setError(null);
-          } catch (err) {
-              setError("Failed to load save file: " + (err as Error).message);
-          }
-      };
-      reader.readAsText(file);
-      // Reset input
-      e.target.value = '';
-  };
-
-  // --- WORLD CREATION ---
+  // --- Handlers ---
 
   const handleCreateWorld = async () => {
-      if (!apiKey) { setError("API Key Required"); return; }
-      
+      if (!apiKey) return;
       setIsGeneratingWorld(true);
-      setError(null);
       setGenerationLogs(["Initializing system..."]);
-
       try {
-          const newState = await createWorldState(apiKey, worldIdea, (logMessage) => {
-              setGenerationLogs(prev => [...prev, logMessage]);
-          });
-          
-          setGameState(newState);
-          setStateHistory([]); 
-          
-          // Format opening scene: it can now be string[] or string
-          const openingContent = Array.isArray(newState.openingScene) 
-              ? newState.openingScene.join('\n\n')
-              : newState.openingScene || "Welcome to the world.";
-
-          setHistory([{ 
-              role: 'model', 
-              content: openingContent
-          }]);
+          const newState = await createWorldState(apiKey, worldIdea, (log) => setGenerationLogs(prev => [...prev, log]));
+          engine.setGameState(newState);
+          engine.setHistory([{ role: 'model', content: Array.isArray(newState.openingScene) ? newState.openingScene.join('\n\n') : (newState.openingScene || "Welcome") }]);
           setMode('GAME');
-      } catch (err: any) {
-          setError("Ошибка создания мира: " + err.message);
+      } catch (e: any) {
+          engine.setError(e.message);
       } finally {
           setIsGeneratingWorld(false);
       }
   };
 
   const handleStartDefault = () => {
-      setGameState(INITIAL_GAME_STATE);
-      setStateHistory([]);
-      const intro = Array.isArray(INITIAL_GAME_STATE.openingScene) 
-        ? INITIAL_GAME_STATE.openingScene.join('\n\n') 
-        : "Welcome.";
-      setHistory([{ role: 'model', content: intro }]);
+      const repaired = repairGameState(INITIAL_GAME_STATE);
+      engine.setGameState(repaired);
+      engine.setHistory([{ role: 'model', content: Array.isArray(repaired.openingScene) ? repaired.openingScene.join('\n\n') : "Welcome." }]);
       setMode('GAME');
-  }
-
-  // --- GAMEPLAY ACTIONS ---
-
-  const handleUpdateNPC = (id: string, updates: Partial<NPC>) => {
-      setGameState(prev => ({
-          ...prev,
-          npcs: (prev.npcs || []).map(n => n.id === id ? { ...n, ...updates } : n)
-      }));
   };
 
-  const handleDeleteNPC = (id: string) => {
-      setGameState(prev => ({
-          ...prev,
-          npcs: (prev.npcs || []).filter(n => n.id !== id)
-      }));
+  const handleExportSave = () => {
+      const saveFile: SaveFile = {
+          version: 1,
+          timestamp: Date.now(),
+          name: engine.gameState.player.name,
+          gameState: sanitizeStateForAi(engine.gameState),
+          history: engine.history,
+          stateHistory: engine.stateHistory.map(sanitizeStateForAi)
+      };
+      const blob = new Blob([JSON.stringify(saveFile, null, 2)], { type: "application/json" });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `save_${saveFile.name}_${Date.now()}.json`;
+      a.click();
   };
-  
-  const handleUpdatePreferences = (newPrefs: string) => {
-      setGameState(prev => ({
-          ...prev,
-          metaPreferences: newPrefs
-      }));
-  }
 
-  const handleGenerateLocationImage = async (locId: string, prompt: string) => {
-      if (!apiKey) return;
-      const imageUrl = await generateImage(apiKey, prompt);
-      if (imageUrl) {
-          setGameState(prev => ({
-              ...prev,
-              locations: (prev.locations || []).map(l => l.id === locId ? { ...l, imageUrl } : l)
-          }));
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+          try {
+              const content = ev.target?.result as string;
+              engine.loadGame(JSON.parse(content));
+              setMode('GAME');
+          } catch(err) { console.error(err); }
+      };
+      reader.readAsText(file);
+  };
+
+  const onEditMsg = (index: number, content: string) => {
+      const shouldRetry = engine.handleEditMessage(index, content);
+      if (shouldRetry) {
+          engine.handleAction(content);
       }
   };
 
-  const handleGenerateCharacterImage = async (prompt: string) => {
-      if (!apiKey) return;
-      const imageUrl = await generateImage(apiKey, prompt);
-      if (imageUrl) {
-          setGameState(prev => ({
-              ...prev,
-              player: { ...prev.player, imageUrl }
-          }));
-      }
+  const onRollback = (index: number) => {
+      const text = engine.handleRollback(index);
+      if (text) setInput(text);
   };
 
-  const handleGenerateSceneImage = async (index: number) => {
+  const onGenImage = async (index: number) => {
       if (!apiKey) return;
-      const message = history[index];
-      if (!message || message.role !== 'model') return;
-
-      // Create a focused prompt for scene generation
-      const prompt = `Style: ${gameState.visualStyle}. SCENE ILLUSTRATION: ${message.content.substring(0, 400)}. High detail, cinematic composition, atmospheric lighting.`;
-      
-      const imageUrl = await generateImage(apiKey, prompt);
-      
-      if (imageUrl) {
-          setHistory(prev => {
-              const updated = [...prev];
-              updated[index] = { ...updated[index], sceneImage: imageUrl };
-              return updated;
+      const msg = engine.history[index];
+      const url = await generateImage(apiKey, `Style: ${engine.gameState.visualStyle}. ${msg.content.substring(0,400)}`);
+      if (url) {
+          engine.setHistory(prev => {
+              const next = [...prev];
+              next[index] = { ...next[index], sceneImage: url };
+              return next;
           });
       }
   };
 
-  const handleAction = useCallback(async (customInput?: string, stateOverride?: GameState, historyOverride?: ChatMessage[]) => {
-    const actionText = customInput || input;
-    const currentState = stateOverride || gameState;
-    const currentHistory = historyOverride || history;
-
-    if (!actionText.trim() || isProcessing) return;
-    if (!apiKey) { setError("API Key is missing."); return; }
-
-    setInput('');
-    setSuggestedActions([]); 
-    setError(null);
-    setIsProcessing(true);
-    
-    if (!stateOverride) {
-        setStateHistory(prev => [...prev, gameState]);
-    }
-
-    const newHistory = [...currentHistory, { role: 'user', content: actionText }];
-    setHistory(newHistory as ChatMessage[]);
-
-    try {
-      // 1. MAIN ENGINE: Generate Story & Local Updates
-      const narrativeContext = newHistory.map(h => 
-        `${h.role === 'user' ? (isDirectorMode ? 'DIRECTOR' : 'PLAYER') : 'GM'}: ${h.content}`
-      );
-
-      const result = await generateStoryTurn(apiKey, currentState, narrativeContext, actionText, isDirectorMode);
-
-      // 2. IMMEDIATE UI UPDATE (Narrative + Local Changes)
-      let tempGameState: GameState = currentState;
-
-      setGameState(prevState => {
-        const updates = result.stateUpdate || {};
-        
-        let updatedNPCs = [...(prevState.npcs || [])];
-        if (updates.npcs) {
-            updates.npcs.forEach((uNPC: Partial<NPC>) => {
-                const idx = updatedNPCs.findIndex(n => n.id === uNPC.id);
-                if (idx !== -1) updatedNPCs[idx] = { ...updatedNPCs[idx], ...uNPC };
-                else if (uNPC.id && uNPC.name) updatedNPCs.push(uNPC as NPC);
-            });
-        }
-
-        let updatedLocations = [...(prevState.locations || [])];
-        if (updates.locations) {
-            updates.locations.forEach((uLoc: Partial<WorldLocation>) => {
-                const idx = updatedLocations.findIndex(l => l.id === uLoc.id);
-                if (idx !== -1) {
-                    updatedLocations[idx] = { 
-                        ...updatedLocations[idx], 
-                        ...uLoc,
-                        imageUrl: uLoc.imageUrl || updatedLocations[idx].imageUrl,
-                        connectedLocationIds: uLoc.connectedLocationIds || updatedLocations[idx].connectedLocationIds || []
-                    };
-                } else if (uLoc.id && uLoc.name) {
-                    updatedLocations.push({ ...uLoc, connectedLocationIds: uLoc.connectedLocationIds || [] } as WorldLocation);
-                }
-            });
-        }
-        
-        const prevLore = prevState.worldLore || [];
-        const newLore = updates.worldLore || [];
-        const mergedLore = [...prevLore, ...newLore.filter(l => !prevLore.includes(l))];
-
-        const prevEvents = prevState.activeEvents || [];
-        const newEvents = updates.activeEvents || prevEvents;
-
-        const newState = {
-            ...prevState,
-            ...updates,
-            turnCount: prevState.turnCount + 1,
-            player: { 
-                ...prevState.player, 
-                ...updates.player,
-                imageUrl: updates.player?.imageUrl || prevState.player.imageUrl,
-                inventory: updates.player?.inventory || prevState.player.inventory || [],
-                statusEffects: updates.player?.statusEffects || prevState.player.statusEffects || [],
-                knownRumors: updates.player?.knownRumors || prevState.player.knownRumors || []
-            },
-            npcs: updatedNPCs,
-            locations: updatedLocations,
-            worldLore: mergedLore,
-            activeEvents: newEvents,
-            storytellerThoughts: updates.storytellerThoughts || prevState.storytellerThoughts,
-            metaPreferences: prevState.metaPreferences // LOCKED: AI cannot change this
-        };
-
-        tempGameState = newState; // Capture for next step
-        return newState;
-      });
-
-      setHistory(prev => [...prev, { 
-          role: 'model', 
-          content: result.narrative
-      }]);
-      setSuggestedActions(result.suggestedActions || []);
-
-      // 3. BACKGROUND SIMULATION (Split Brain - Async)
-      // Fire and forget - doesn't block the UI, but updates state eventually.
-      simulateBackgroundWorld(apiKey, tempGameState, result.narrative).then((bgResult) => {
-          if (bgResult.npcs && bgResult.npcs.length > 0) {
-              setGameState(current => {
-                  let finalNPCs = [...current.npcs];
-                  bgResult.npcs.forEach(bgNPC => {
-                      const idx = finalNPCs.findIndex(n => n.id === bgNPC.id);
-                      if (idx !== -1) {
-                          // Only update internal state/pos, don't overwrite local interactions
-                          finalNPCs[idx] = { ...finalNPCs[idx], ...bgNPC };
-                      }
-                  });
-                  return { ...current, npcs: finalNPCs };
-              });
-          }
-      });
-
-    } catch (err: any) {
-      setError(err.message || "Something went wrong.");
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [input, apiKey, gameState, history, isProcessing, isDirectorMode]);
-
-  const handleEditMessage = (index: number, newContent: string) => {
-    const isLastUserAction = index === history.length - 2 && history[history.length - 1].role === 'model';
-    const isVeryLastMessage = index === history.length - 1 && history[index].role === 'user';
-
-    if (isLastUserAction || isVeryLastMessage) {
-        if (stateHistory.length === 0) return;
-        const previousState = stateHistory[stateHistory.length - 1];
-        setGameState(previousState);
-        const trimmedHistory = history.slice(0, index);
-        setHistory(trimmedHistory);
-        handleAction(newContent, previousState, trimmedHistory);
-    } else {
-        setHistory(prev => {
-            const updated = [...prev];
-            updated[index] = { ...updated[index], content: newContent };
-            return updated;
-        });
-    }
-  };
-
-  const handleRegenerate = () => {
-      if (stateHistory.length === 0 || history.length < 2) return;
-      const previousState = stateHistory[stateHistory.length - 1];
-      const lastUserMessage = history[history.length - 2]; 
-      if (!lastUserMessage || lastUserMessage.role !== 'user') return;
-      setGameState(previousState);
-      const trimmedHistory = history.slice(0, -2);
-      setHistory(trimmedHistory);
-      handleAction(lastUserMessage.content, previousState, trimmedHistory);
-  };
-
-  const handleSaveStyle = (style: string) => {
-      setGameState(prev => ({ ...prev, visualStyle: style }));
-  };
-
-  const handleItemUse = (itemName: string) => {
-      setInput(`Использовать ${itemName}`);
-      setIsLeftDrawerOpen(false); 
-  };
-
-  const handleTravel = (locName: string) => {
-      handleAction(`Отправиться в ${locName}`);
-      setIsRightDrawerOpen(false); 
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleAction();
-    }
+      if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          engine.handleAction(input);
+          setInput('');
+      }
   };
 
-  // Safe derivation of highlight data with empty array checks
   const highlightData = {
-      npcNames: (gameState.npcs || []).map(n => n.name),
-      itemNames: (gameState.player?.inventory || []).map(i => i.name),
-      effectNames: gameState.player?.statusEffects || []
+      npcNames: (engine.gameState.npcs || []).map(n => n.name),
+      itemNames: (engine.gameState.player?.inventory || []).map(i => i.name),
+      effectNames: engine.gameState.player?.statusEffects || []
   };
 
   if (mode === 'MENU') {
       return (
-          <div className="flex h-screen bg-slate-950 text-slate-200 items-center justify-center font-sans p-4 relative overflow-hidden">
-               <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(79,70,229,0.1),transparent_70%)]" />
-               <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl relative z-10">
-                   <div className="flex justify-center mb-6"><BookOpen size={48} className="text-indigo-500" /></div>
-                   <h1 className="text-4xl font-heading font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-purple-400 mb-2">Chronicles of the Deep World</h1>
-                   <p className="text-center text-slate-500 mb-8 font-serif italic">Version 1.0 — Infinite Context Engine</p>
-                   
-                   {error && (
-                       <div className="mb-4 bg-red-900/50 border border-red-800 text-red-200 p-3 rounded text-sm text-center flex flex-col items-center gap-2">
-                           <span>{error}</span>
-                           <button 
-                             onClick={handleCreateWorld} 
-                             className="text-xs bg-red-800 hover:bg-red-700 text-white px-3 py-1 rounded flex items-center gap-1"
-                            >
-                               <RotateCcw size={12} /> Попробовать снова
-                           </button>
-                       </div>
-                   )}
-                   
+          <div className="flex h-screen bg-slate-950 text-slate-200 items-center justify-center p-4 overflow-hidden relative">
+               <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(79,70,229,0.1),transparent_70%)]" />
+               <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl z-10">
+                   <h1 className="text-4xl font-heading font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-purple-400 mb-2">Chronicles</h1>
                    {isGeneratingWorld ? (
-                       <div className="bg-black/50 border border-indigo-500/30 rounded-lg p-6 font-mono text-sm h-64 flex flex-col relative overflow-hidden">
-                           <div className="absolute top-0 left-0 right-0 bg-indigo-900/20 p-2 flex items-center gap-2 border-b border-indigo-500/20 text-xs text-indigo-300"><Terminal size={12} /> System Kernel</div>
-                           <div className="mt-8 flex-1 space-y-2 overflow-y-auto custom-scrollbar">
-                                {generationLogs.map((log, i) => (
-                                    <div key={i} className="flex items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-300 text-slate-400">
-                                        <span className="text-indigo-500 mt-0.5">➜</span>
-                                        <span>{log}</span>
-                                    </div>
-                                ))}
-                                <div ref={logsEndRef} />
-                           </div>
-                       </div>
+                        <div className="bg-black/50 border border-indigo-500/30 rounded p-4 h-64 overflow-y-auto custom-scrollbar font-mono text-xs text-slate-400 space-y-1">
+                            {generationLogs.map((l,i) => <div key={i}>➜ {l}</div>)}
+                            <div ref={logsEndRef}/>
+                        </div>
                    ) : (
                        <div className="space-y-6">
-                           <textarea 
-                               className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-4 text-slate-200 focus:border-indigo-500 focus:outline-none transition-colors resize-none"
-                               placeholder="Опишите мир... (Например: Заброшенная космическая станция...)"
-                               value={worldIdea}
-                               onChange={(e) => setWorldIdea(e.target.value)}
-                           />
-                           
+                           <textarea className="w-full h-32 bg-slate-950 border border-slate-700 rounded p-4 text-slate-200 resize-none focus:border-indigo-500 outline-none" value={worldIdea} onChange={e => setWorldIdea(e.target.value)} placeholder="Describe your world..." />
                            <div className="grid grid-cols-2 gap-3">
-                               <button onClick={handleCreateWorld} disabled={!worldIdea} className="col-span-2 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg">
-                                   <Sparkles /> Генерировать Мир
-                               </button>
-                               
-                               <button onClick={handleStartDefault} className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-medium flex items-center justify-center gap-2 transition-all">
-                                   <Play size={16} /> Старт (Демо)
-                               </button>
-
-                               <button onClick={handleImportClick} className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-medium flex items-center justify-center gap-2 transition-all border border-slate-700">
-                                   <Upload size={16} /> Загрузить Мир
-                               </button>
-                               <input 
-                                   type="file" 
-                                   ref={fileInputRef} 
-                                   className="hidden" 
-                                   accept=".json" 
-                                   onChange={handleFileChange}
-                               />
+                               <button onClick={handleCreateWorld} disabled={!worldIdea} className="col-span-2 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold flex justify-center gap-2"><Sparkles/> Generate</button>
+                               <button onClick={handleStartDefault} className="py-3 bg-slate-800 rounded flex justify-center gap-2"><Play size={16}/> Demo</button>
+                               <button onClick={() => fileInputRef.current?.click()} className="py-3 bg-slate-800 rounded flex justify-center gap-2"><Upload size={16}/> Load</button>
+                               <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileChange} />
                            </div>
                        </div>
                    )}
                </div>
           </div>
-      )
+      );
   }
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-200 overflow-hidden font-sans relative">
-      <SettingsModal 
-        isOpen={showSettings} 
-        onClose={() => setShowSettings(false)}
-        visualStyle={gameState.visualStyle || ""}
-        onSaveStyle={handleSaveStyle}
-        apiKey={apiKey}
-        onSaveKey={setApiKey}
-        onExportSave={handleExportSave}
-      />
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} visualStyle={engine.gameState.visualStyle} onSaveStyle={(s) => engine.setGameState(p => ({...p, visualStyle: s}))} apiKey={apiKey} onSaveKey={setApiKey} onExportSave={handleExportSave} />
+      {showCharacterModal && <CharacterModal player={engine.gameState.player} onClose={() => setShowCharacterModal(false)} visualStyle={engine.gameState.visualStyle} />}
+      {showMapModal && <MapModal locations={engine.gameState.locations} currentLocationId={engine.gameState.currentLocationId} npcs={engine.gameState.npcs} onTravel={(n) => { engine.handleAction(`Go to ${n}`); setShowMapModal(false); }} onClose={() => setShowMapModal(false)} />}
 
-      {showCharacterModal && (
-          <CharacterModal 
-              player={gameState.player} 
-              onClose={() => setShowCharacterModal(false)} 
-              visualStyle={gameState.visualStyle}
-          />
-      )}
-
-      {showMapModal && (
-          <MapModal
-              locations={gameState.locations || []}
-              currentLocationId={gameState.currentLocationId}
-              npcs={gameState.npcs || []}
-              onTravel={handleTravel}
-              onClose={() => setShowMapModal(false)}
-          />
-      )}
-
-      {/* --- MOBILE DRAWERS --- */}
-      <div className={`fixed inset-0 z-40 lg:hidden transition-opacity duration-300 ${isLeftDrawerOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setIsLeftDrawerOpen(false)} />
-          <div className={`absolute left-0 top-0 bottom-0 w-80 bg-slate-950 shadow-2xl transition-transform duration-300 transform ${isLeftDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-             <button onClick={() => setIsLeftDrawerOpen(false)} className="absolute top-2 right-2 p-2 text-slate-400 hover:text-white"><X size={20}/></button>
-             <LeftPanel 
-                player={gameState.player} 
-                location={(gameState.locations || []).find(l => l.id === gameState.currentLocationId)}
-                time={gameState.currentTime}
-                onItemUse={handleItemUse} 
-                onGenerateLocationImage={handleGenerateLocationImage}
-                onGenerateCharacterImage={handleGenerateCharacterImage}
-                onMaximizeCharacter={() => setShowCharacterModal(true)}
-                visualStyle={gameState.visualStyle}
-            />
-          </div>
-      </div>
-
-      <div className={`fixed inset-0 z-40 lg:hidden transition-opacity duration-300 ${isRightDrawerOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setIsRightDrawerOpen(false)} />
-          <div className={`absolute right-0 top-0 bottom-0 w-80 bg-slate-900 shadow-2xl transition-transform duration-300 transform ${isRightDrawerOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col`}>
-              <button onClick={() => setIsRightDrawerOpen(false)} className="absolute top-2 left-2 p-2 text-slate-400 hover:text-white z-50"><X size={20}/></button>
-              <div className="flex border-b border-slate-800 mt-10">
-                  <button onClick={() => setRightTab('MAP')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'MAP' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>Map</button>
-                  <button onClick={() => setRightTab('NPC')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'NPC' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>NPCs</button>
-                  <button onClick={() => setRightTab('GOD')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'GOD' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>God</button>
-              </div>
-              <div className="flex-1 relative overflow-hidden">
-                  {rightTab === 'MAP' && <WorldMap locations={gameState.locations || []} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs || []} onTravel={handleTravel} onMaximize={() => setShowMapModal(true)} />}
-                  {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} onDeleteNPC={handleDeleteNPC} />}
-                  {rightTab === 'GOD' && <StateInspector gameState={gameState} onUpdatePreferences={handleUpdatePreferences} />}
-              </div>
-          </div>
-      </div>
-
-      {/* --- DESKTOP LAYOUT --- */}
       <div className="hidden lg:block w-72 h-full z-10 shadow-xl border-r border-slate-800 bg-slate-950">
         <LeftPanel 
-            player={gameState.player} 
-            location={(gameState.locations || []).find(l => l.id === gameState.currentLocationId)}
-            time={gameState.currentTime}
-            onItemUse={handleItemUse} 
-            onGenerateLocationImage={handleGenerateLocationImage}
-            onGenerateCharacterImage={handleGenerateCharacterImage}
+            player={engine.gameState.player} quests={engine.gameState.quests} 
+            location={engine.gameState.locations.find(l => l.id === engine.gameState.currentLocationId)} 
+            time={engine.gameState.currentTime} visualStyle={engine.gameState.visualStyle}
+            onItemUse={(n) => engine.handleAction(`Use ${n}`)} 
             onMaximizeCharacter={() => setShowCharacterModal(true)}
-            visualStyle={gameState.visualStyle}
+            onGenerateCharacterImage={async (p) => { if(apiKey) { const u = await generateImage(apiKey, p); if(u) engine.setGameState(s => ({...s, player: {...s.player, imageUrl: u}})) }}}
+            onGenerateLocationImage={async (id, p) => { if(apiKey) { const u = await generateImage(apiKey, p); if(u) engine.setGameState(s => ({...s, locations: s.locations.map(l => l.id === id ? {...l, imageUrl: u} : l)})) }}}
         />
       </div>
 
-      {/* Center Column: Story */}
       <div className="flex flex-col flex-1 min-w-0 bg-slate-950 relative">
         <header className="h-14 border-b border-slate-800 bg-slate-900/80 backdrop-blur flex items-center justify-between px-4 z-20">
              <div className="flex items-center gap-3">
-                 <button onClick={() => setIsLeftDrawerOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white"><Menu size={20} /></button>
-                 <button onClick={() => setMode('MENU')} className="hidden lg:block p-2 text-slate-400 hover:text-white"><BookOpen size={18} /></button>
-                 <span className="font-heading font-bold text-slate-200 truncate max-w-[150px] sm:max-w-xs">{(gameState.locations || []).find(l => l.id === gameState.currentLocationId)?.name}</span>
+                 <button onClick={() => setMode('MENU')} className="p-2 text-slate-400 hover:text-white"><BookOpen size={18} /></button>
+                 <span className="font-heading font-bold text-slate-200 truncate">{engine.gameState.locations.find(l => l.id === engine.gameState.currentLocationId)?.name}</span>
              </div>
              <div className="flex items-center gap-2">
-                 <button 
-                    onClick={() => setIsDirectorMode(!isDirectorMode)}
-                    className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold transition-all ${isDirectorMode ? 'bg-purple-900/50 text-purple-300 border border-purple-500' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}
-                 >
-                     <span className="hidden sm:inline">{isDirectorMode ? 'DIRECTOR MODE' : 'PLAYER MODE'}</span>
-                     <span className="sm:hidden">{isDirectorMode ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}</span>
+                 <button onClick={() => engine.setIsDirectorMode(!engine.isDirectorMode)} className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${engine.isDirectorMode ? 'bg-purple-900/50 text-purple-300' : 'bg-slate-800 text-slate-400'}`}>
+                     {engine.isDirectorMode ? 'DIRECTOR' : 'PLAYER'}
                  </button>
                  <button onClick={() => setShowSettings(true)} className="p-2 text-slate-400 hover:text-white"><SettingsIcon size={18} /></button>
-                 <button onClick={() => setIsRightDrawerOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white"><Info size={20} /></button>
              </div>
         </header>
 
         <main className="flex-1 relative flex flex-col min-h-0">
-           <NarrativeView 
-                history={history} 
-                isThinking={isProcessing} 
-                highlightData={highlightData}
-                onEditMessage={handleEditMessage}
-                onRegenerate={handleRegenerate}
-                onGenerateSceneImage={handleGenerateSceneImage}
-           />
+           {engine.error && (
+               <div className="bg-red-900/50 p-4 border-b border-red-700 text-red-200 text-sm flex justify-between items-center animate-in fade-in slide-in-from-top-5">
+                   <span>{engine.error}</span>
+                   <button onClick={() => engine.setError(null)}><X size={16} /></button>
+               </div>
+           )}
            
+           <NarrativeView 
+                history={engine.history} isThinking={engine.isProcessing} highlightData={highlightData}
+                onEditMessage={onEditMsg} onDeleteMessage={engine.handleDeleteMessage}
+                onRegenerate={() => { /* Logic to be added if needed */ }}
+                onRollback={onRollback} onGenerateSceneImage={onGenImage}
+           />
            <div className="p-4 bg-gradient-to-t from-slate-950 via-slate-950 to-transparent z-10">
-             {!isProcessing && suggestedActions.length > 0 && !isDirectorMode && (
+             {!engine.isProcessing && engine.suggestedActions.length > 0 && !engine.isDirectorMode && (
                  <div className="flex flex-wrap gap-2 mb-3 justify-center">
-                     {suggestedActions.map((action, i) => (
-                         <button 
-                            key={i} 
-                            onClick={() => handleAction(action.actionText)}
-                            className="px-3 py-1 bg-slate-800 hover:bg-indigo-900/50 border border-slate-700 hover:border-indigo-500 rounded-full text-xs text-indigo-200 transition-colors animate-in slide-in-from-bottom-2 fade-in duration-300"
-                            style={{ animationDelay: `${i * 100}ms` }}
-                         >
-                             {action.label}
-                         </button>
+                     {engine.suggestedActions.map((a, i) => (
+                         <button key={i} onClick={() => { engine.handleAction(a.actionText); setInput(''); }} className="px-3 py-1 bg-slate-800 hover:bg-indigo-900/50 border border-slate-700 rounded-full text-xs text-indigo-200 transition-colors">{a.label}</button>
                      ))}
                  </div>
              )}
-
-             <div className="max-w-3xl mx-auto relative">
-               {error && <div className="absolute -top-12 left-0 right-0 bg-red-900/80 text-red-200 text-sm px-4 py-2 rounded mb-2 flex justify-between items-center">
-                   <span>{error}</span>
-                   <button onClick={() => handleAction()} className="p-1 hover:bg-red-800 rounded"><RotateCcw size={14} /></button>
-               </div>}
-               
-               <div className="relative group">
-                 <div className={`absolute -inset-0.5 rounded-lg blur opacity-20 group-hover:opacity-40 transition duration-1000 ${isDirectorMode ? 'bg-gradient-to-r from-purple-500 to-amber-500' : 'bg-gradient-to-r from-indigo-500 to-purple-600'}`}></div>
-                 
-                 <div className={`relative flex bg-slate-900 rounded-lg shadow-xl ring-1 ${isDirectorMode ? 'ring-purple-900' : 'ring-slate-800'}`}>
-                    <input
-                      type="text"
-                      className={`flex-1 bg-transparent text-slate-100 px-4 py-4 focus:outline-none ${isDirectorMode ? 'placeholder-purple-500/50' : 'placeholder-slate-500'}`}
-                      placeholder={isDirectorMode ? "Приказ Режиссера (God Mode)..." : "Ваши действия..."}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      disabled={isProcessing}
-                      autoFocus
-                    />
-                    <button onClick={() => handleAction()} disabled={isProcessing || !input.trim()} className={`px-6 transition-colors ${isDirectorMode ? 'text-purple-400 hover:text-purple-300' : 'text-indigo-400 hover:text-indigo-300 disabled:opacity-50'}`}>
-                        {isDirectorMode ? <Sparkles size={20} /> : <Send size={20} />}
-                    </button>
+             <div className="max-w-3xl mx-auto relative group">
+                 <div className={`absolute -inset-0.5 rounded-lg blur opacity-20 group-hover:opacity-40 transition duration-1000 ${engine.isDirectorMode ? 'bg-gradient-to-r from-purple-500 to-amber-500' : 'bg-gradient-to-r from-indigo-500 to-purple-600'}`}></div>
+                 <div className="relative flex bg-slate-900 rounded-lg shadow-xl ring-1 ring-slate-800">
+                    <input type="text" className="flex-1 bg-transparent text-slate-100 px-4 py-4 focus:outline-none" placeholder={engine.isDirectorMode ? "Director command..." : "Action..."} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} disabled={engine.isProcessing} autoFocus />
+                    <button onClick={() => { engine.handleAction(input); setInput(''); }} disabled={engine.isProcessing || !input.trim()} className="px-6 text-indigo-400 hover:text-indigo-300 disabled:opacity-50"><Send size={20} /></button>
                  </div>
-               </div>
              </div>
            </div>
         </main>
       </div>
 
-      {/* Right Column: Map & Inspector & NPCs (Desktop Only) */}
       <div className="hidden lg:flex w-80 h-full flex-col bg-slate-900 border-l border-slate-800 z-10 shadow-xl">
           <div className="flex border-b border-slate-800">
-              <button onClick={() => setRightTab('MAP')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${rightTab === 'MAP' ? 'text-indigo-400 bg-slate-800/50 border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}><MapIcon size={14} /></button>
-              <button onClick={() => setRightTab('NPC')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${rightTab === 'NPC' ? 'text-indigo-400 bg-slate-800/50 border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}><Users size={14} /></button>
-              <button onClick={() => setRightTab('GOD')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${rightTab === 'GOD' ? 'text-indigo-400 bg-slate-800/50 border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}><Database size={14} /></button>
+              <button onClick={() => setRightTab('MAP')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'MAP' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>Map</button>
+              <button onClick={() => setRightTab('NPC')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'NPC' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>NPCs</button>
+              <button onClick={() => setRightTab('GOD')} className={`flex-1 py-3 text-xs font-bold uppercase ${rightTab === 'GOD' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-500'}`}>God</button>
           </div>
-          
           <div className="flex-1 relative overflow-hidden">
-              {rightTab === 'MAP' && <WorldMap locations={gameState.locations || []} currentLocationId={gameState.currentLocationId} npcs={gameState.npcs || []} onTravel={handleTravel} onMaximize={() => setShowMapModal(true)} />}
-              {rightTab === 'NPC' && <NPCList npcs={gameState.npcs || []} locations={gameState.locations || []} onUpdateNPC={handleUpdateNPC} onDeleteNPC={handleDeleteNPC} />}
-              {rightTab === 'GOD' && <StateInspector gameState={gameState} onUpdatePreferences={handleUpdatePreferences} />}
+              {rightTab === 'MAP' && <WorldMap locations={engine.gameState.locations} currentLocationId={engine.gameState.currentLocationId} npcs={engine.gameState.npcs} onTravel={(n) => engine.handleAction(`Go to ${n}`)} onMaximize={() => setShowMapModal(true)} />}
+              {rightTab === 'NPC' && <NPCList npcs={engine.gameState.npcs} locations={engine.gameState.locations} onUpdateNPC={(id, u) => engine.setGameState(s => ({...s, npcs: s.npcs.map(n => n.id === id ? {...n, ...u} : n)}))} onDeleteNPC={(id) => engine.setGameState(s => ({...s, npcs: s.npcs.filter(n => n.id !== id)}))} />}
+              {rightTab === 'GOD' && <StateInspector gameState={engine.gameState} onUpdatePreferences={(p) => engine.setGameState(s => ({...s, metaPreferences: p}))} onUpdateTheme={(t) => engine.setGameState(s => ({...s, worldTheme: t}))} />}
           </div>
       </div>
     </div>

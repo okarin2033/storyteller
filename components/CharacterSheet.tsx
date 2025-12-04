@@ -1,17 +1,19 @@
 
 import React, { useState } from 'react';
-import { PlayerStats } from '../types';
-import { Heart, Package, Shield, User, Shirt, Camera, Loader2, RefreshCw } from 'lucide-react';
+import { PlayerStats, Quest } from '../types';
+import { Heart, Package, Shield, User, Shirt, Camera, Loader2, RefreshCw, Scroll, CheckCircle, Circle, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface CharacterSheetProps {
     player: PlayerStats;
+    quests?: Quest[];
     onItemUse: (itemName: string) => void;
     onGenerateImage?: (desc: string) => Promise<void>;
     visualStyle?: string;
 }
 
-const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGenerateImage, visualStyle }) => {
+const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, quests = [], onItemUse, onGenerateImage, visualStyle }) => {
     const [loading, setLoading] = useState(false);
+    const [showAllEffects, setShowAllEffects] = useState(false);
 
     const handleGen = async () => {
         if (!onGenerateImage) return;
@@ -21,8 +23,17 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
         setLoading(false);
     }
 
+    // Status Effects Logic
+    const statusEffects = player.statusEffects || [];
+    const MAX_VISIBLE_EFFECTS = 4;
+    const visibleEffects = showAllEffects ? statusEffects : statusEffects.slice(0, MAX_VISIBLE_EFFECTS);
+    const hiddenCount = statusEffects.length - MAX_VISIBLE_EFFECTS;
+
+    const activeQuests = quests.filter(q => q.status === 'Active');
+    const completedQuests = quests.filter(q => q.status === 'Completed');
+
     return (
-        <div className="flex flex-col h-full font-sans text-slate-200 overflow-y-auto custom-scrollbar pr-2">
+        <div className="flex flex-col h-full font-sans text-slate-200 overflow-y-auto custom-scrollbar pr-2 min-h-0">
             
             {/* Portrait & HP - No longer fixed */}
             <div className="mb-4 space-y-3">
@@ -92,21 +103,38 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
 
             <div className="h-px bg-slate-800 mb-4" />
 
-            <div className="space-y-4 pb-4">
-                 {/* Status Effects */}
+            <div className="space-y-6 pb-4">
+                 {/* Status Effects (Collapsible) */}
                 <div>
                     <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
-                        <Shield size={10} /> Состояние
+                        <Shield size={10} /> Состояние ({statusEffects.length})
                     </h3>
                     <div className="flex flex-wrap gap-2">
-                        {(player.statusEffects || []).length > 0 ? (
-                            (player.statusEffects || []).map((effect, i) => (
+                        {visibleEffects.length > 0 ? (
+                            visibleEffects.map((effect, i) => (
                                 <span key={i} className="px-2 py-1 bg-indigo-900/30 border border-indigo-700/50 text-indigo-200 text-xs rounded shadow-sm">
                                     {effect}
                                 </span>
                             ))
                         ) : (
                             <span className="text-slate-600 text-xs italic">Без эффектов</span>
+                        )}
+                        
+                        {!showAllEffects && hiddenCount > 0 && (
+                            <button 
+                                onClick={() => setShowAllEffects(true)}
+                                className="px-2 py-1 bg-slate-800 border border-slate-700 text-slate-400 text-xs rounded shadow-sm hover:text-white flex items-center gap-1"
+                            >
+                                +{hiddenCount} <ChevronDown size={10} />
+                            </button>
+                        )}
+                         {showAllEffects && statusEffects.length > MAX_VISIBLE_EFFECTS && (
+                            <button 
+                                onClick={() => setShowAllEffects(false)}
+                                className="px-2 py-1 bg-slate-800 border border-slate-700 text-slate-400 text-xs rounded shadow-sm hover:text-white flex items-center gap-1"
+                            >
+                                Hide <ChevronUp size={10} />
+                            </button>
                         )}
                     </div>
                 </div>
@@ -141,6 +169,54 @@ const CharacterSheet: React.FC<CharacterSheetProps> = ({ player, onItemUse, onGe
                         )}
                     </div>
                 </div>
+
+                {/* Quest Log */}
+                <div>
+                     <h3 className="text-[10px] font-bold text-amber-600/80 uppercase tracking-wider mb-2 flex items-center gap-1">
+                        <Scroll size={10} /> Quest Log
+                    </h3>
+                    
+                    {/* Active Quests */}
+                    <div className="space-y-2 mb-2">
+                        {activeQuests.map(q => (
+                             <div key={q.id} className="bg-amber-950/20 border border-amber-900/40 p-2 rounded">
+                                 <div className="flex items-start gap-2 mb-1">
+                                    <Circle size={10} className="text-amber-500 mt-1 flex-shrink-0" />
+                                    <span className="text-xs font-bold text-amber-200">{q.title}</span>
+                                 </div>
+                                 <p className="text-[10px] text-amber-200/60 pl-4">{q.description}</p>
+                                 {q.objectives && q.objectives.length > 0 && (
+                                     <ul className="pl-4 mt-1 space-y-0.5">
+                                         {q.objectives.map((obj, idx) => (
+                                             <li key={idx} className="text-[9px] text-amber-500/50">• {obj}</li>
+                                         ))}
+                                     </ul>
+                                 )}
+                             </div>
+                        ))}
+                    </div>
+
+                    {/* Completed (Collapsed by default logic not implemented for completed, just showing small) */}
+                    {completedQuests.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-800">
+                             <div className="space-y-1 opacity-60 hover:opacity-100 transition-opacity">
+                                 {completedQuests.map(q => (
+                                     <div key={q.id} className="flex items-center gap-2 text-[10px] text-slate-500">
+                                         <CheckCircle size={10} className="text-green-800" />
+                                         <span className="line-through">{q.title}</span>
+                                     </div>
+                                 ))}
+                             </div>
+                        </div>
+                    )}
+                    
+                    {activeQuests.length === 0 && completedQuests.length === 0 && (
+                         <div className="text-center py-2 text-slate-700 text-xs italic">
+                             Нет активных задач
+                         </div>
+                    )}
+                </div>
+
             </div>
         </div>
     );

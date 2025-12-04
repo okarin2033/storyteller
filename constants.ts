@@ -7,6 +7,7 @@ export const INITIAL_GAME_STATE: GameState = {
   currentLocationId: "tavern",
   currentTime: "Stormy Night",
   visualStyle: "Dark Fantasy, Realistic Oil Painting, Moody Lighting",
+  worldTheme: "A gritty, low-magic fantasy world where the ocean is slowly swallowing the land. Atmosphere: Melancholic, desperate, wet, cold.",
   storytellerThoughts: "The player has just arrived. I need to establish the atmosphere and introduce the hook.",
   metaPreferences: "Focus on mystery and exploration. Keep combat rare but deadly.",
   openingScene: [
@@ -28,6 +29,7 @@ export const INITIAL_GAME_STATE: GameState = {
     statusEffects: [],
     knownRumors: []
   },
+  quests: [],
   npcs: [
     {
       id: "grom",
@@ -36,11 +38,14 @@ export const INITIAL_GAME_STATE: GameState = {
       locationId: "tavern",
       visibleToPlayer: true,
       status: "Alive",
+      isActive: true,
       internalThoughts: "Протирай стакан. Не бей посетителя.",
       emotionalState: "Скука",
       currentGoal: "Разливать напитки",
+      plans: "Закрыть таверну через час.",
       opinionOfPlayer: "Neutral",
-      knownFacts: []
+      knownFacts: [],
+      memories: ["Открыл таверну утром.", "Выгнал пьяного гнома."]
     }
   ],
   locations: [
@@ -105,14 +110,23 @@ Your goal is to simulate a persistent, living world that GROWS.
 3. **LIVING WORLD SIMULATION**: 
    - **Appearance**: Update the player's 'appearance' (physical/clothing) if they change clothes, get wounded, or get dirty.
    - **Consistent Items**: If an item is used, remove it. If one is found, add it.
+   - **STATUS EFFECTS (STRICT)**: Maintain a clean list. **Remove old or redundant effects.** Keep max 5 active. If a new effect overrides an old one (e.g. Bandaged -> Healing), remove the old one.
+   - **NPC MEMORY**: If an NPC interacts with the player, add a brief string to their 'memories' array (e.g. "Met the wanderer", "Was insulted by player").
 
-4. **DYNAMIC EXPANSION (Map Building)**:
+4. **QUEST MANAGEMENT**:
+   - Track player goals in the 'quests' array.
+   - **New Quest**: Add when the player accepts a mission or forms a clear long-term goal.
+   - **Update**: Mark objectives as done.
+   - **Complete/Fail**: Change status.
+   - **Consolidate**: Do not create duplicate quests.
+
+5. **DYNAMIC EXPANSION (Map Building)**:
    - If player goes to a new place (e.g. "I walk into the forest"), YOU MUST CREATE IT.
    - **CRITICAL**: When creating a new location, you MUST add a connection to the 'connectedLocationIds' of the PREVIOUS location, and vice versa.
    - Define 'distance' (approx meters/difficulty) and 'status' (Open/Blocked).
    - **NPC SPAWNING**: Only spawn NPCs when necessary. **EPISODIC NPCs**: If a random NPC (like a thug) is defeated or leaves, mark their status as 'Missing' or 'Dead' so they are cleaned up later.
 
-5. **MECHANICS**:
+6. **MECHANICS**:
    - Track HP.
    - Suggest 3 distinct actions for the user in 'suggestedActions'.
    - **DICE ROLLS**: If the user attempts a RISKY or SKILL-BASED action (fighting, climbing, lying, stealing), YOU decide the outcome using a simulated dice roll.
@@ -135,8 +149,12 @@ CRITICAL CONSTRAINTS:
 4. Ensure the map is connected (connectedLocationIds must be valid objects with targetId, distance, status).
 5. **NPC LIMIT**: Create **0 to 1 Essential NPCs** (e.g. a guide or a quest giver). Do not overpopulate the start. Let the story create more later.
 6. Set a visualStyle appropriate for the genre.
-7. Initialize 'storytellerThoughts' with a plan for the opening hook.
-8. Initialize 'metaPreferences' with defaults (e.g. "Balanced adventure").
+7. Initialize 'storytellerThoughts' (your plan) and 'metaPreferences' (defaults).
+8. WRITE THE OPENING SCENE as an array of strings (paragraphs).
+9. Set all NPCs 'isActive' to true.
+10. **THEME**: Capture the essence of the user's prompt in the 'worldTheme' field.
+11. **QUESTS**: If appropriate, start with 1 main quest active.
+12. **MEMORY**: Initialize NPC 'memories' with 1-2 background facts about what they did recently.
 `;
 
 export const GENERATION_LOGS = [];

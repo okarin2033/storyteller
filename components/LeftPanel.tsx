@@ -1,11 +1,12 @@
 
 import React, { useState } from 'react';
-import { PlayerStats, WorldLocation } from '../types';
+import { PlayerStats, WorldLocation, Quest } from '../types';
 import CharacterSheet from './CharacterSheet';
 import { MapPin, Clock, Camera, Loader2, Maximize2 } from 'lucide-react';
 
 interface LeftPanelProps {
     player: PlayerStats;
+    quests?: Quest[];
     location: WorldLocation | undefined;
     time: string;
     onItemUse: (itemName: string) => void;
@@ -15,7 +16,7 @@ interface LeftPanelProps {
     visualStyle: string;
 }
 
-const LeftPanel: React.FC<LeftPanelProps> = ({ player, location, time, onItemUse, onGenerateLocationImage, onGenerateCharacterImage, onMaximizeCharacter, visualStyle }) => {
+const LeftPanel: React.FC<LeftPanelProps> = ({ player, quests, location, time, onItemUse, onGenerateLocationImage, onGenerateCharacterImage, onMaximizeCharacter, visualStyle }) => {
     const [loadingImage, setLoadingImage] = useState(false);
 
     // Generate Abstract CSS Art based on location type
@@ -113,6 +114,7 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ player, location, time, onItemUse
             <div className="flex-1 p-4 overflow-hidden flex flex-col min-h-0">
                 <CharacterSheet 
                     player={player} 
+                    quests={quests}
                     onItemUse={onItemUse} 
                     onGenerateImage={onGenerateCharacterImage}
                     visualStyle={visualStyle}

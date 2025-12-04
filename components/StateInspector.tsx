@@ -1,10 +1,12 @@
+
 import React, { useState } from 'react';
 import { GameState, NPC, WorldItem, WorldLocation } from '../types';
-import { Eye, Brain, MapPin, Database, Package, Activity, Globe, Book, Users, ChevronRight, ChevronDown, Sparkles, Save } from 'lucide-react';
+import { Eye, Brain, MapPin, Database, Package, Activity, Globe, Book, Users, ChevronRight, ChevronDown, Sparkles, Save, Anchor } from 'lucide-react';
 
 interface StateInspectorProps {
   gameState: GameState;
   onUpdatePreferences?: (newPrefs: string) => void;
+  onUpdateTheme?: (newTheme: string) => void;
 }
 
 // Helper Component for Folders
@@ -34,8 +36,9 @@ const InspectorFolder: React.FC<{
     );
 };
 
-const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePreferences }) => {
+const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePreferences, onUpdateTheme }) => {
   const [prefInput, setPrefInput] = useState(gameState.metaPreferences);
+  const [themeInput, setThemeInput] = useState(gameState.worldTheme);
   
   // Helper to find location name
   const getLocationName = (id: string) => (gameState.locations || []).find(l => l.id === id)?.name || "Unknown";
@@ -43,6 +46,12 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
   const handleBlurPrefs = () => {
       if (onUpdatePreferences && prefInput !== gameState.metaPreferences) {
           onUpdatePreferences(prefInput);
+      }
+  }
+
+  const handleBlurTheme = () => {
+      if (onUpdateTheme && themeInput !== gameState.worldTheme) {
+          onUpdateTheme(themeInput);
       }
   }
 
@@ -60,6 +69,20 @@ const StateInspector: React.FC<StateInspectorProps> = ({ gameState, onUpdatePref
         {/* --- FOLDER: STORYTELLER --- */}
         <InspectorFolder title="Storyteller & Meta" icon={<Sparkles size={14} />} defaultOpen={true}>
             <div className="space-y-4">
+                <div>
+                    <span className="text-[10px] uppercase font-bold text-amber-500 block mb-1 flex items-center gap-1"><Anchor size={10} /> World Theme / Anchor</span>
+                    <textarea 
+                        className="w-full h-24 bg-slate-950 border border-amber-900/30 rounded p-2 text-xs text-amber-100/90 focus:border-amber-500 focus:outline-none resize-none"
+                        value={themeInput}
+                        onChange={(e) => setThemeInput(e.target.value)}
+                        onBlur={handleBlurTheme}
+                        placeholder="The core prompt or theme of the world..."
+                    />
+                     <div className="text-[9px] text-slate-500 mt-1">
+                        The "Soul" of the world. AI is reminded of this every turn.
+                    </div>
+                </div>
+
                 <div>
                     <span className="text-[10px] uppercase font-bold text-indigo-400 block mb-1">AI Story Plan</span>
                     <div className="p-2 bg-indigo-950/30 border border-indigo-900/50 rounded text-indigo-200 italic text-xs leading-relaxed">

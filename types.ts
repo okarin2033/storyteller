@@ -6,13 +6,16 @@ export interface NPC {
   locationId: string; // Links to a WorldLocation id
   visibleToPlayer: boolean; // If false, they are in the scene but hiding, or just not noticed yet
   status: 'Alive' | 'Dead' | 'Unconscious' | 'Missing';
+  isActive?: boolean; // If false, the AI ignores this NPC completely (Stasis)
   
   // The "Deep" Internal State
   internalThoughts: string;
   emotionalState: string;
   currentGoal: string;
+  plans?: string; // What they intend to do next
   opinionOfPlayer: string;
   knownFacts: string[];
+  memories?: string[]; // Persistent history of their own actions
 }
 
 export interface WorldItem {
@@ -38,6 +41,14 @@ export interface WorldLocation {
   imageUrl?: string;
 }
 
+export interface Quest {
+  id: string;
+  title: string;
+  description: string;
+  status: 'Active' | 'Completed' | 'Failed';
+  objectives: string[];
+}
+
 export interface PlayerStats {
   name: string;
   hp: { current: number; max: number };
@@ -56,6 +67,7 @@ export interface GameState {
   currentLocationId: string; 
   currentTime: string;
   visualStyle: string; // Global art style setting
+  worldTheme: string; // THE PERSISTENT ANCHOR: The original prompt + core atmosphere instructions
   
   // New Narrative Control Fields
   storytellerThoughts: string; // The AI's hidden plan/analysis of the plot
@@ -63,6 +75,7 @@ export interface GameState {
   openingScene?: string[]; // CHANGED: Array of paragraphs for stability
 
   player: PlayerStats;
+  quests: Quest[];
 
   npcs: NPC[];
   locations: WorldLocation[];

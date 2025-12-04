@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
-import { GameState, StorySegment, NPC } from "../types";
+import { GameState, StorySegment, NPC, WorldLocation } from "../types";
 import { SYSTEM_INSTRUCTION, WORLD_GEN_INSTRUCTION } from "../constants";
 
 const cleanJson = (text: string): string => {
@@ -38,6 +38,58 @@ export const sanitizeStateForAi = (state: GameState): GameState => {
     return cleanState;
 };
 
+/**
+ * Aggressively repairs a game state object to ensure all required arrays and fields exist.
+ * This fixes "Cannot read property of undefined" crashes when loading old or partial saves.
+ */
+export const repairGameState = (state: any): GameState => {
+    if (!state) return state;
+
+    // Ensure Top-Level Fields
+    if (!state.turnCount) state.turnCount = 1;
+    if (!state.currentLocationId) state.currentLocationId = "unknown";
+    if (!state.currentTime) state.currentTime = "Unknown Time";
+    if (!state.worldTheme) state.worldTheme = "Generic RPG World";
+    
+    // Arrays
+    if (!Array.isArray(state.quests)) state.quests = [];
+    if (!Array.isArray(state.npcs)) state.npcs = [];
+    if (!Array.isArray(state.locations)) state.locations = [];
+    if (!Array.isArray(state.worldLore)) state.worldLore = [];
+    if (!Array.isArray(state.activeEvents)) state.activeEvents = [];
+    
+    // Player
+    if (!state.player) {
+        state.player = { name: "Survivor", hp: {current: 10, max: 10}, appearance: {}, inventory: [] };
+    }
+    if (!state.player.hp) state.player.hp = { current: 10, max: 10 };
+    if (!state.player.appearance) state.player.appearance = { physical: "Unknown", clothing: "Unknown" };
+    if (!Array.isArray(state.player.inventory)) state.player.inventory = [];
+    if (!Array.isArray(state.player.statusEffects)) state.player.statusEffects = [];
+    if (!Array.isArray(state.player.knownRumors)) state.player.knownRumors = [];
+
+    // Repair Locations (Deep check)
+    state.locations.forEach((loc: any) => {
+        if (!Array.isArray(loc.connectedLocationIds)) loc.connectedLocationIds = [];
+    });
+
+    // Repair NPCs (Memories)
+    state.npcs.forEach((npc: any) => {
+        if (!Array.isArray(npc.knownFacts)) npc.knownFacts = [];
+        if (!Array.isArray(npc.memories)) npc.memories = [];
+        if (!npc.plans) npc.plans = "Exist";
+    });
+
+    // Opening Scene Normalization
+    if (typeof state.openingScene === 'string') {
+        state.openingScene = [state.openingScene];
+    } else if (!Array.isArray(state.openingScene)) {
+        state.openingScene = ["Welcome to the world."];
+    }
+
+    return state as GameState;
+};
+
 // --- Safety Settings (Disable Censorship) ---
 const SAFETY_SETTINGS = [
     { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -57,6 +109,18 @@ const itemSchema = {
         quantity: { type: Type.NUMBER },
         properties: { type: Type.ARRAY, items: { type: Type.STRING } }
     }
+};
+
+const questSchema = {
+    type: Type.OBJECT,
+    properties: {
+        id: { type: Type.STRING },
+        title: { type: Type.STRING },
+        description: { type: Type.STRING },
+        status: { type: Type.STRING, enum: ['Active', 'Completed', 'Failed'] },
+        objectives: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ["id", "title", "status"]
 };
 
 const playerSchema = {
@@ -88,10 +152,12 @@ const npcSchema = {
       internalThoughts: { type: Type.STRING },
       emotionalState: { type: Type.STRING },
       currentGoal: { type: Type.STRING },
+      plans: { type: Type.STRING, description: "Immediate future plan" },
       opinionOfPlayer: { type: Type.STRING },
       visibleToPlayer: { type: Type.BOOLEAN },
       description: { type: Type.STRING },
-      knownFacts: { type: Type.ARRAY, items: { type: Type.STRING } }
+      knownFacts: { type: Type.ARRAY, items: { type: Type.STRING } },
+      memories: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Log of past actions and events" }
     },
     required: ["id", "name", "locationId", "internalThoughts"]
 };
@@ -153,66 +219,6 @@ export const generateImage = async (apiKey: string, prompt: string): Promise<str
     }
 }
 
-// --- Background Simulation (Split Brain) ---
-
-export const simulateBackgroundWorld = async (
-    apiKey: string,
-    state: GameState,
-    recentNarrative: string
-): Promise<{ npcs: NPC[] }> => {
-    const ai = new GoogleGenAI({ apiKey });
-    
-    // Filter only distant NPCs
-    const distantNPCs = (state.npcs || []).filter(n => n.locationId !== state.currentLocationId && n.status === 'Alive');
-    
-    if (distantNPCs.length === 0) return { npcs: [] };
-
-    const prompt = `
-    TASK: Background World Simulation.
-    
-    You are managing the "off-screen" world.
-    The Player is currently at: ${state.currentLocationId}.
-    The Player just experienced: "${recentNarrative.substring(0, 200)}..."
-    
-    UPDATE these DISTANT NPCs:
-    ${JSON.stringify(distantNPCs, null, 2)}
-    
-    RULES:
-    1. These NPCs DO NOT KNOW what the player just did (unless it was a massive explosion).
-    2. They should follow their 'currentGoal' or daily routine.
-    3. They might move to a connected location.
-    4. If an NPC is "Episodic" (random thug/shopkeeper) and no longer relevant, you can set status to 'Missing' to clean them up.
-    
-    RETURN: JSON object with 'npcs' array containing ONLY the updated distant NPCs.
-    `;
-
-    const simSchema = {
-        type: Type.OBJECT,
-        properties: {
-            npcs: { type: Type.ARRAY, items: npcSchema }
-        }
-    };
-
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: simSchema,
-                safetySettings: SAFETY_SETTINGS
-            }
-        });
-        
-        const text = response.text || "{}";
-        const data = JSON.parse(cleanJson(text));
-        return { npcs: data.npcs || [] };
-    } catch (e) {
-        console.warn("Background sim failed", e);
-        return { npcs: [] };
-    }
-}
-
 // --- Story Generation ---
 
 export const generateStoryTurn = async (
@@ -225,15 +231,8 @@ export const generateStoryTurn = async (
   const ai = new GoogleGenAI({ apiKey });
 
   const safeState = sanitizeStateForAi(currentState);
-  const SAFE_HISTORY_LIMIT = 50;
+  const SAFE_HISTORY_LIMIT = 200; // Restore high limit
   const slicedHistory = history.slice(-SAFE_HISTORY_LIMIT);
-
-  // Filter out distant NPCs from the main prompt to prevent "Omniscience"
-  const localNPCs = (safeState.npcs || []).filter(n => n.locationId === safeState.currentLocationId);
-  const narrativeState = {
-      ...safeState,
-      npcs: localNPCs // Only show local NPCs to the narrative engine
-  };
 
   const responseSchema = {
     type: Type.OBJECT,
@@ -247,10 +246,11 @@ export const generateStoryTurn = async (
           currentTime: { type: Type.STRING },
           visualStyle: { type: Type.STRING },
           storytellerThoughts: { type: Type.STRING },
-          // metaPreferences REMOVED - AI cannot write to it
+          worldTheme: { type: Type.STRING },
           player: playerSchema,
           npcs: { type: Type.ARRAY, items: npcSchema },
           locations: { type: Type.ARRAY, items: locationSchema },
+          quests: { type: Type.ARRAY, items: questSchema },
           worldLore: { type: Type.ARRAY, items: { type: Type.STRING } },
           activeEvents: { type: Type.ARRAY, items: { type: Type.STRING } }
         }
@@ -263,7 +263,17 @@ export const generateStoryTurn = async (
     ? "MODE: DIRECTOR / GOD MODE enabled. The user Input is a META-COMMAND. Execute it immediately to alter the world state, spawn entities, or force narrative events. Ignore normal gameplay logic/limitations."
     : "MODE: PLAYER MODE. Standard RPG logic applies.";
 
+  // Filter out Stasis NPCs to save tokens
+  const narrativeState = {
+      ...safeState,
+      npcs: (safeState.npcs || []).filter(n => n.isActive !== false)
+  };
+
   const prompt = `
+    CORE WORLD THEME / ORIGINAL PROMPT (THE ANCHOR):
+    "${currentState.worldTheme}"
+    (Ensure the tone, atmosphere, and logic remain consistent with this core theme.)
+
     CURRENT LOCAL STATE (Player + Local Context):
     ${JSON.stringify(narrativeState, null, 2)}
 
@@ -279,29 +289,30 @@ export const generateStoryTurn = async (
     
     INSTRUCTIONS:
     1. Advance the story scene-by-scene. Slow pacing.
-    2. Simulate LOCAL NPC behavior only.
-    3. Update JSON state.
+    2. Simulate LOCAL NPC behavior only. Do not hallucinate updates for distant NPCs.
+    3. Update JSON state (including Quests and Status Effects - keep them clean).
     4. Provide 3 suggested actions.
     5. Update 'storytellerThoughts' with your plan.
+    6. **CRITICAL FAIL-SAFE**: If the user's action violates safety policies or you cannot generate the specific scene description (e.g. due to sexual content limits), **DO NOT return an empty string**. Instead, generate a narrative where the protagonist experiences a sudden "Neural Interface Glitch", "Dizziness", or "Fade to Black" that interrupts the specific act but keeps the game running. The 'narrative' field MUST contain text.
+    7. **NPC MEMORY**: If the player interacts with an NPC, add a short summary to that NPC's 'memories' array.
   `;
 
   // Helper to process response
   const processResponse = (text: string) => {
       const cleaned = cleanJson(text);
-      if (!cleaned) throw new Error("Empty response received");
+      if (!cleaned) throw new Error("Empty response received from AI.");
       
       let data;
       try {
         data = JSON.parse(cleaned);
       } catch (e) {
-        throw new Error(`JSON Parse Error. Raw text starts with: ${text.substring(0, 100)}...`);
+        throw new Error(`JSON Parse Error. The AI might have refused the request. Raw text: "${text.substring(0, 300)}..."`);
       }
 
       if (!data.updates) data.updates = {};
       
-      // Safety check for empty narrative
       if (!data.narrative || data.narrative.trim() === "..." || data.narrative.trim().length === 0) {
-          throw new Error("AI returned empty narrative (Safety Block or Generation Error).");
+          throw new Error(`AI returned empty narrative (Safety Block). Raw response was valid JSON but empty text.`);
       }
       return data;
   };
@@ -340,7 +351,7 @@ export const generateStoryTurn = async (
                 responseMimeType: "application/json",
                 responseSchema: responseSchema,
                 maxOutputTokens: 8192,
-                safetySettings: SAFETY_SETTINGS // Disable censorship even on fallback
+                safetySettings: SAFETY_SETTINGS 
             }
         });
 
@@ -355,11 +366,10 @@ export const generateStoryTurn = async (
         console.error("Critical Failure (Fallback also failed):", fallbackError);
         let msg = "The world logic fractured (Both Primary and Backup models failed).";
         
-        // Log raw outputs if available for debugging
-        const raw1 = error.response?.text || error.message;
-        const raw2 = fallbackError.response?.text || fallbackError.message;
+        if (error.response?.text) console.error("Primary Raw:", error.response.text);
+        if (fallbackError.response?.text) console.error("Fallback Raw:", fallbackError.response.text);
 
-        throw new Error(`${msg}\n\n[Debug Info]\nErr1: ${raw1?.substring(0, 200)}\nErr2: ${raw2?.substring(0, 200)}`);
+        throw new Error(`${msg} Details: ${fallbackError.message}`);
     }
   }
 };
@@ -386,10 +396,12 @@ export const createWorldState = async (
             currentTime: { type: Type.STRING },
             visualStyle: { type: Type.STRING },
             storytellerThoughts: { type: Type.STRING },
+            worldTheme: { type: Type.STRING },
             metaPreferences: { type: Type.STRING },
             player: playerSchema,
             npcs: { type: Type.ARRAY, items: npcSchema },
             locations: { type: Type.ARRAY, items: locationSchema },
+            quests: { type: Type.ARRAY, items: questSchema },
             worldLore: { type: Type.ARRAY, items: { type: Type.STRING } },
             activeEvents: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
@@ -408,6 +420,7 @@ export const createWorldState = async (
       6. Define a cohesive 'visualStyle' for image generation.
       7. Initialize 'storytellerThoughts' (your plan) and 'metaPreferences' (defaults).
       8. WRITE THE OPENING SCENE as an array of strings (paragraphs).
+      9. Capture the user prompt in 'worldTheme'.
     `;
 
     try {
@@ -455,7 +468,9 @@ export const createWorldState = async (
              throw new Error(`Data corruption detected. Raw length: ${fullText.length}`);
         }
         
-        validateState(newState);
+        if (!newState.worldTheme) newState.worldTheme = userPrompt;
+
+        newState = repairGameState(newState);
         
         onLog("World Generation Complete. Entering simulation.");
         return newState;
@@ -479,8 +494,10 @@ export const createWorldState = async (
             
             onLog("Fallback data received.");
             const jsonText = fallbackResponse.text || "{}";
-            const newState = JSON.parse(cleanJson(jsonText)) as GameState;
-            validateState(newState);
+            let newState = JSON.parse(cleanJson(jsonText)) as GameState;
+            
+            if (!newState.worldTheme) newState.worldTheme = userPrompt;
+            newState = repairGameState(newState);
             
             onLog("World stabilized.");
             return newState;
@@ -493,43 +510,78 @@ export const createWorldState = async (
     }
 }
 
-function validateState(state: any) {
-    if (!state.player || !state.locations) {
-        console.warn("Partial state detected during validation.");
-    }
-    
-    if (!state.turnCount) state.turnCount = 1;
-    if (!state.player) state.player = { name: "Survivor", hp: {current:10,max:10}, appearance: {}, inventory: []};
-    if (!state.player.hp) state.player.hp = { current: 20, max: 20 };
-    if (!state.player.appearance) state.player.appearance = { physical: "Неизвестно", clothing: "Неизвестно" };
-    
-    if (!state.player.inventory) state.player.inventory = [];
-    if (!state.player.statusEffects) state.player.statusEffects = [];
-    if (!state.player.knownRumors) state.player.knownRumors = [];
-    
-    delete state.player.imageUrl;
-    
-    if (!state.worldLore) state.worldLore = [];
-    if (!state.activeEvents) state.activeEvents = [];
-    
-    if (!state.locations) state.locations = [];
-    state.locations.forEach((loc: any) => {
-        if (!loc.connectedLocationIds) loc.connectedLocationIds = [];
-        delete loc.imageUrl;
-    });
-    
-    if (!state.npcs) state.npcs = [];
-    state.npcs.forEach((npc: any) => {
-        if (!npc.knownFacts) npc.knownFacts = [];
-    });
+// --- Background Simulation (Split Brain) ---
 
-    if (!state.visualStyle) state.visualStyle = "Fantasy, Detailed, Digital Art";
-    if (!state.storytellerThoughts) state.storytellerThoughts = "Analyzing input...";
-    if (!state.metaPreferences) state.metaPreferences = "Balanced adventure.";
+export const simulateBackgroundWorld = async (
+    apiKey: string,
+    state: GameState
+): Promise<{ npcs: NPC[] }> => {
+    const ai = new GoogleGenAI({ apiKey });
     
-    if (!state.openingScene) {
-        state.openingScene = [`**${state.currentTime}**`, `Вы находитесь в ${state.locations.find((l:any) => l.id === state.currentLocationId)?.name || 'Unknown'}.`];
-    } else if (typeof state.openingScene === 'string') {
-        state.openingScene = [state.openingScene];
+    // Filter only distant NPCs that are ACTIVE and ALIVE
+    const distantNPCs = (state.npcs || []).filter(n => 
+        n.locationId !== state.currentLocationId && 
+        n.status === 'Alive' && 
+        n.isActive !== false
+    );
+    
+    // If no distant NPCs, we can return early, BUT we want to force simulation if needed
+    if (distantNPCs.length === 0) return { npcs: [] };
+
+    // Pass the locations so NPCs know where they can go
+    const mapStructure = state.locations.map(l => ({
+        id: l.id, 
+        name: l.name, 
+        connectedTo: l.connectedLocationIds.map(c => c.targetId)
+    }));
+
+    const prompt = `
+    TASK: Background World Simulation (Autonomous Agents).
+    
+    You are the simulation engine for NPCs who are NOT in the current scene with the player.
+    
+    CORE WORLD THEME: "${state.worldTheme}"
+    CURRENT TIME: ${state.currentTime}
+    MAP: ${JSON.stringify(mapStructure)}
+
+    AGENTS TO SIMULATE:
+    ${JSON.stringify(distantNPCs, null, 2)}
+    
+    INSTRUCTIONS:
+    1. **AUTONOMY**: NPCs are NOT statues. They must pursue their 'currentGoal' or daily routine.
+    2. **MOVEMENT**: If an NPC needs to go somewhere, CHANGE their 'locationId' to a connected location.
+    3. **MEMORY**: YOU MUST add a short log entry to the 'memories' array for each NPC describing what they just did (e.g. "Walked to the market", "Slept", "Argued with a guard").
+    4. **PLANS**: Update their 'plans' field for the next turn.
+    5. **STRICT ISOLATION**: These NPCs DO NOT KNOW what the player is doing right now. Do NOT reference the player's current actions.
+    6. **CLEANUP**: If an NPC is minor/episodic and leaves the map area or story relevance, set status to 'Missing' or 'Gone'.
+    
+    RETURN: JSON object with 'npcs' array containing the updated distant NPCs.
+    `;
+
+    const simSchema = {
+        type: Type.OBJECT,
+        properties: {
+            npcs: { type: Type.ARRAY, items: npcSchema }
+        },
+        required: ["npcs"]
+    };
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: simSchema,
+                safetySettings: SAFETY_SETTINGS
+            }
+        });
+
+        const text = response.text || "{}";
+        const result = JSON.parse(cleanJson(text));
+        return result;
+    } catch (e) {
+        console.warn("Background Sim Failed", e);
+        return { npcs: [] };
     }
 }
